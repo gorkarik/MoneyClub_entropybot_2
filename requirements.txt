@@ -1,0 +1,8 @@
+# base requirements — enough for --record-only data collection;
+# live trading additionally needs requirements-live.txt
+# базовые зависимости — хватает для тестовой записи; для боевого режима нужен requirements-live.txt
+aiohttp>=3.9
+websockets>=12.0
+python-dotenv>=1.0
+PyYAML>=6.0
+rich>=13.0

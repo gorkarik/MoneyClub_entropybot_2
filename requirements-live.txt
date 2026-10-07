@@ -1,0 +1,14 @@
+# live-trading requirements (transaction signing SDKs)
+# зависимости боевого режима (SDK для подписи ордеров)
+-r requirements.txt
+
+# Hyperliquid signing (Entropy leg, and the tradexyz hedge)
+hyperliquid-python-sdk>=0.9
+eth-account>=0.10
+
+# Lighter signing (only needed with --hedge lighter / lighter-rh).
+# Installs from the SDK's current main; for reproducible deploys, append a
+# known-good commit: ...lighter-python.git@<commit-sha>
+# Нужно только для хеджа lighter / lighter-rh. Ставится последняя версия SDK;
+# для воспроизводимой установки можно закрепить коммит: ...lighter-python.git@<commit-sha>
+lighter-sdk @ git+https://github.com/elliottech/lighter-python.git
