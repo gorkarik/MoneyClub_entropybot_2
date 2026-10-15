@@ -17,6 +17,8 @@ from typing import List, Optional
 
 import aiohttp
 
+from .results import breakdown_line
+
 log = logging.getLogger("telegram")
 
 API = "https://api.telegram.org/bot{token}/{method}"
@@ -178,6 +180,10 @@ def finish_text(eng, s: dict) -> str:
     el = edge_line(s.get("edge_compare"))
     if el:
         lines.append(el)
+        bl = breakdown_line(pnl, s["edge_compare"][2],
+                            s.get("funding_entropy"), s.get("funding_hedge"))
+        if bl:
+            lines.append(bl)
     reason = s.get("reason", "")
     lines.append("Остановка: " + STOP_REASONS.get(
         reason, reason.replace("halt: ", "аварийная: ") or "—"))

@@ -266,12 +266,15 @@ def test_strategy_menu_settings_load(tmp_path, monkeypatch):
     c = load_config("config.yaml", "/x", symbol="SNDK",
                     hedge_venue="lighter-rh")
     assert c.exec_mode == "volume" and c.max_excess_bps == 6
-    assert c.volume_narrow_bps == 1.5 and c.volume_max_cost_usd == 1
+    # the volume preset is fixed: old keys are ignored; the narrowing is
+    # 2 bps, or half the pair's narrower side when the band is small
+    from entropy_arb.strategy import VOLUME_MAX_COST_USD, volume_narrow_bps
+    assert c.volume_max_cost_usd == VOLUME_MAX_COST_USD == 1.0
+    assert c.volume_narrow_bps == volume_narrow_bps(c.upper_bps, c.lower_bps)
+    assert club.cfg_values(pair)["vol_narrow"] == c.volume_narrow_bps
     assert c.slipgate_enabled
-    # a narrowing that would eat the whole band is refused, nothing saved
-    with pytest.raises(RuntimeError):
-        club.save_config([("execution", "volume_narrow_bps", "9")], pair)
-    assert club.cfg_values(pair)["vol_narrow"] == 1.5
+    club.save_config([("execution", "volume_narrow_bps", "9")], pair)
+    assert club.cfg_values(pair)["vol_narrow"] == c.volume_narrow_bps
 
 
 def test_each_execution_mode_learns_its_own_slippage(tmp_path):

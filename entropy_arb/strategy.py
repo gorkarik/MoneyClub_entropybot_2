@@ -6,12 +6,15 @@ Three ways to enter a trade (config: execution.mode). Exactly one is active:
   2  entropy_first  "Сначала Entropy"  Entropy IOC with a tight price limit
                                        first, the hedge only for what filled
   3  volume         "Объём"            as 2, with the entry band narrowed by
-                                       volume_narrow_bps for more trades,
+                                       VOLUME_NARROW_BPS for more trades,
                                        held to a price of volume: while the
                                        realized cost of $10 000 of Entropy
-                                       volume is above volume_max_cost_usd,
+                                       volume is above VOLUME_MAX_COST_USD,
                                        opening trades need that much more
                                        premium (closes are never held back)
+
+The narrowing and the price ceiling are fixed here, not settings: limits
+are the same for every strategy and set by hand, the volume preset is not.
 
 The volume cost is measured on the bot's own trades of this pair:
 
@@ -36,6 +39,8 @@ STRATEGIES = {
 }
 MODES = tuple(STRATEGIES)
 
+VOLUME_NARROW_BPS = 2.0         # entry band narrower on each side, bps
+VOLUME_MAX_COST_USD = 1.0       # most $10 000 of Entropy volume may cost
 VOLUME_WINDOW_TRADES = 50       # the cost is measured over the last N trades
 VOLUME_WINDOW_HOURS = 72.0      # ... no older than this
 VOLUME_MIN_TRADES = 10          # fewer trades: no guard yet (too noisy)
@@ -50,6 +55,26 @@ def strategy_title(mode: str, with_number: bool = True) -> str:
     """'Стратегия 2 · Сначала Entropy'."""
     num, title = STRATEGIES.get(mode, (0, mode))
     return f"Стратегия {num} · {title}" if with_number and num else title
+
+
+def volume_narrow_bps(upper_bps: float, lower_bps: float) -> float:
+    """Strategy 3 narrowing for a pair: VOLUME_NARROW_BPS, but never more
+    than half of the pair's narrower side (a band must stay a band)."""
+    side = min(upper_bps, lower_bps)
+    return round(max(0.0, min(VOLUME_NARROW_BPS, side / 2.0)), 2)
+
+
+# Pairs where the Entropy leg slips the most: a tight Entropy limit
+# (strategies 2 and 3) misses a large share of signals there.
+MISS_PRONE = ("SNDK", "NBIS")
+
+
+def miss_warning(mode: str, symbol: str) -> str:
+    """Warning for strategies 2/3 on a miss-prone ticker, else ''."""
+    if not tight_entropy_first(mode) or symbol.upper() not in MISS_PRONE:
+        return ""
+    return (f"{symbol.upper()}: у стратегий 2 и 3 здесь много промахов — "
+            f"цена на Entropy часто уходит дальше предела, и сделок мало")
 
 
 def tight_entropy_first(mode: str) -> bool:

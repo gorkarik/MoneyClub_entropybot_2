@@ -39,6 +39,8 @@ import yaml
 from dotenv import load_dotenv
 
 from .autonomy import AutonomyConf
+from .strategy import VOLUME_MAX_COST_USD
+from .strategy import volume_narrow_bps as strategy_volume_narrow
 
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
@@ -192,9 +194,10 @@ class Config:
     exec_mode: str = "simultaneous"
     entropy_first_slip_bps: float = 5.0
     # strategy 3: entry band narrowed by this many bps on each side, and the
-    # most a $10 000 of Entropy volume may cost (realized, dollars = bps)
-    volume_narrow_bps: float = 1.0
-    volume_max_cost_usd: float = 2.0
+    # most a $10 000 of Entropy volume may cost (realized, dollars = bps).
+    # Fixed in strategy.py; the old config keys are read and ignored.
+    volume_narrow_bps: float = 2.0
+    volume_max_cost_usd: float = 1.0
     # skip signals that beat their entry hurdle by more than this (a premium
     # too good to be real is usually a stale book); 0 = off
     max_excess_bps: float = 0.0
@@ -277,8 +280,8 @@ _SCHEMA: Dict[str, Any] = {
         "mode": str,           # simultaneous | entropy_first | volume
         "entropy_first_slip_bps": float,
         "max_excess_bps": float,
-        "volume_narrow_bps": float,
-        "volume_max_cost_usd": float,
+        "volume_narrow_bps": float,    # ignored: fixed in strategy.py
+        "volume_max_cost_usd": float,  # ignored: fixed in strategy.py
     },
     "slipgate": {
         "enabled": bool,
@@ -673,19 +676,9 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                           "предел цены Entropy: от 0.5 до 50 bps")
     if max_excess < 0:
         raise ConfigError("execution.max_excess_bps must be >= 0 (0 = off)")
-    vol_narrow = float(_get(raw, "execution", "volume_narrow_bps", 1.0))
-    vol_cost = float(_get(raw, "execution", "volume_max_cost_usd", 2.0))
-    if not 0.0 <= vol_narrow <= 20.0:
-        raise ConfigError("execution.volume_narrow_bps must be 0..20 / "
-                          "сужение полосы для объёма: от 0 до 20 bps")
-    if exec_mode == "volume" and vol_narrow >= min(upper, lower):
-        raise ConfigError(
-            f"execution.volume_narrow_bps ({vol_narrow:g}) must be smaller than "
-            f"upper_bps and lower_bps of this pair / сужение полосы должно "
-            f"быть меньше upper и lower пары")
-    if not 0.0 <= vol_cost <= 100.0:
-        raise ConfigError("execution.volume_max_cost_usd must be 0..100 / "
-                          "цена объёма: от 0 до 100 $ за $10 000")
+    # strategy 3 preset is fixed (strategy.py); old keys are ignored
+    vol_narrow = strategy_volume_narrow(upper, lower)
+    vol_cost = VOLUME_MAX_COST_USD
     sg = {k: _get(raw, "slipgate", k, d) for k, d in (
         ("weight", 1.0), ("lookback_hours", 48.0), ("min_fills", 5),
         ("max_samples", 50))}
