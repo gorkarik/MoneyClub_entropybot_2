@@ -1,4 +1,4 @@
-"""Terminal dashboard of MoneyClub_entropybot_2 (Russian with --ru).
+"""Terminal dashboard of MoneyClub_entropybot_3 (Russian with --ru).
 
 Deliberately minimal: one look tells how the session goes.
 
@@ -190,7 +190,7 @@ class Dashboard:
                 live.update(self._safe_render())
                 await asyncio.sleep(0.25)
         t = Text()
-        t.append("MoneyClub_entropybot_2 " + self._t("stopped"), style="bold")
+        t.append("MoneyClub_entropybot_3 " + self._t("stopped"), style="bold")
         r = eng.session_result() if hasattr(eng, "session_result") else None
         if r is not None:
             t.append(self._t(" — session result "))
@@ -465,7 +465,7 @@ class Dashboard:
         eng = self.eng
         if eng.entropy is None or eng.hedge is None or not eng.markets_ready:
             return Panel(Text(self._t("starting — resolving markets…"),
-                              style="yellow"), title="MoneyClub_entropybot_2",
+                              style="yellow"), title="MoneyClub_entropybot_3",
                          box=box.ROUNDED)
         parts = [self._header(), Text("")]
         if eng.record_only:
@@ -504,7 +504,7 @@ class Dashboard:
                 parts.append(Text(""))
             for n in nt:
                 parts.append(Text("• " + n, style="yellow"))
-        return Panel(Group(*parts), title="MoneyClub_entropybot_2", box=box.ROUNDED,
+        return Panel(Group(*parts), title="MoneyClub_entropybot_3", box=box.ROUNDED,
                      padding=(0, 1),
                      subtitle=self._t("Q — exit to the menu (the bot keeps "
                                       "running)"))

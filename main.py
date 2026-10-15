@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MoneyClub_entropybot_2 entry point.
+"""MoneyClub_entropybot_3 entry point.
 
     # collect minute data only — no strategy, no credentials needed
     python3 main.py --record-only --symbol SNDK --hedge lighter-rh

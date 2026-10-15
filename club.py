@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MoneyClub_entropybot_2 — меню управления ботом.
+"""MoneyClub_entropybot_3 — меню управления ботом.
 
 Запуск: команда `moneyclub` (ставится install.sh) или `venv/bin/python club.py`.
 
@@ -88,8 +88,8 @@ ENV_EXAMPLE = ".env.example"
 LOG_DIR = "logs"
 STDERR_LOG = os.path.join(LOG_DIR, "stderr.log")
 
-APP_NAME = "MoneyClub_entropybot_2"
-SUBTITLE = "entropy bot 2"        # мелкая подпись рядом с заставкой
+APP_NAME = "MoneyClub_entropybot_3"
+SUBTITLE = "entropy bot · версия 3"   # мелкая подпись рядом с заставкой
 
 
 def _tmux_name() -> str:
@@ -193,7 +193,7 @@ BANNER_COMPACT = "\n  M O N E Y   C L U B"
 BANNER_STYLE = "bold bright_blue"     # заставка синяя
 
 TMUX_CONF_TEXT = """\
-# Создаётся автоматически меню MoneyClub_entropybot_2 — вручную не редактировать.
+# Создаётся автоматически меню MoneyClub_entropybot_3 — вручную не редактировать.
 set -g default-terminal "screen-256color"
 set -g escape-time 0
 set -g mouse off
@@ -300,7 +300,7 @@ def clear() -> None:
 
 
 def print_banner() -> None:
-    """Синяя заставка MONEY CLUB; мелкая подпись «entropy bot 2» — справа от
+    """Синяя заставка MONEY CLUB; мелкая подпись «entropy bot · версия 3» — справа от
     последней строки букв."""
     wide = console.width >= 52
     lines = (BANNER if wide else BANNER_COMPACT).rstrip("\n").split("\n")

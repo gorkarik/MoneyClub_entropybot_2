@@ -1,6 +1,6 @@
-# MoneyClub_entropybot_2
+# MoneyClub_entropybot_3
 
-MONEY CLUB · entropy bot 2 — второй бот MONEY CLUB.
+MONEY CLUB · entropy bot 3 — третья версия бота MONEY CLUB.
 
 Бот для арбитража между двумя биржами: **Entropy** (Hyperliquid) и второй
 биржей на выбор — **Lighter RH** (Robinhood chain), **Lighter** (core) или
