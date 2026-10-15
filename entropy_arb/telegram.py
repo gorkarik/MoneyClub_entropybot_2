@@ -130,6 +130,13 @@ def start_text(eng) -> str:
         lines.append(f"Пороги: центр {cfg.midline_bps:+g}, "
                      f"+{cfg.upper_bps:g} / −{cfg.lower_bps:g} bps")
         lines.append(strategy_name_line(eng))
+        auto = getattr(eng, "auto", None)
+        if auto is not None and auto.enabled:
+            lines.append(f"Автономность: центр плавающий (медиана за "
+                         f"{auto.window_min:g} мин, до ±{auto.max_drift_bps:g} "
+                         f"от центра пары), выход к центру за "
+                         f"{auto.exit_hours:g} ч, открытия не чаще раза в "
+                         f"{auto.open_cooldown_sec:g} с")
         if getattr(eng, "autocalib_on", False):
             from .autocalib import window_label
             lines.append(f"Автокалибровка центра: вкл (медиана за "
@@ -202,7 +209,14 @@ def _premium_line(eng) -> Optional[str]:
         return None
     line = f"Премия: {p:+.2f} bps"
     if not eng.record_only:
-        line += f" (центр {eng.cfg.midline_bps:+g})"
+        mid = eng.mid_bps() if hasattr(eng, "mid_bps") else eng.cfg.midline_bps
+        if abs(mid - eng.cfg.midline_bps) >= 0.05:
+            line += (f" (центр {mid:+.1f}, плавающий; "
+                     f"в файле пары {eng.cfg.midline_bps:+g})")
+        else:
+            line += f" (центр {eng.cfg.midline_bps:+g})"
+        if getattr(eng, "_jump_on", False):
+            line += "\n⚠ Скачок премии: новые позиции ждут, закрытие разрешено"
     st = eng.premium_stats()
     if st is not None:
         lo, med, hi, _ = st

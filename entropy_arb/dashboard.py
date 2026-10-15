@@ -104,6 +104,10 @@ _RU = {
     "auto-calibration: midline {m} (manual {a}), next check in {h} h":
         "автокалибровка: центр {m} (ручной {a}), следующая проверка через "
         "{h} ч",
+    "floating centre {m} (pair file {a})":
+        "плавающий центр {m} (в файле пары {a})",
+    "premium jump: new positions wait, closing allowed":
+        "скачок премии: новые позиции ждут, закрытие разрешено",
     "unhedged remainder {n} ≈ ${u} — below the minimum order, closed at Stop":
         "остаток без хеджа {n} ≈ ${u} — меньше минимальной сделки, "
         "закроется при Стопе",
@@ -345,6 +349,15 @@ class Dashboard:
                                "minimum order, closed at Stop",
                                n=f"{net:+.6g} {eng.cfg.symbol}",
                                u=f"{usd:.2f}"))
+        c = getattr(eng, "centre", None)
+        if c is not None and c.live is not None \
+                and abs(c.live - eng.cfg.midline_bps) >= 0.05:
+            out.append(self._t("floating centre {m} (pair file {a})",
+                               m=f"{c.live:+.1f}",
+                               a=f"{eng.cfg.midline_bps:+.1f}"))
+        if getattr(eng, "_jump_on", False):
+            out.append(self._t("premium jump: new positions wait, closing "
+                               "allowed"))
         if getattr(eng, "autocalib_on", False):
             if getattr(eng, "autocalib_waiting", False):
                 out.append(self._t("auto-calibration due: waits until the "
