@@ -1694,7 +1694,9 @@ def action_analysis() -> None:
                              "за неделю, месяц, всё время"),
                        ("4", "Пинг до бирж — задержка с этого сервера и "
                              "история замеров"),
-                       ("5", "Сменить пару — другая пара для Анализа, "
+                       ("5", "Бэктест — что дали бы текущие настройки и "
+                             "варианты на записанных стаканах"),
+                       ("6", "Сменить пару — другая пара для Анализа, "
                              "Настроек и Старта")])
         if choice == "1":
             action_calibration()
@@ -1707,9 +1709,41 @@ def action_analysis() -> None:
             action_latency()
             continue
         elif choice == "5":
+            action_backtest()
+            continue
+        elif choice == "6":
             pick_pair_for_menus("Анализ · пара")
             continue
         return
+
+
+BACKTEST_PERIODS = {"1": (1, "сутки"), "2": (3, "3 дня"), "3": (7, "неделя"),
+                    "4": (0, "все записи")}
+
+
+def action_backtest() -> None:
+    """Бэктест: tools/backtest.py --compare по записанным стаканам пары."""
+    v = cfg_values()
+    header("Анализ · бэктест")
+    console.print(f"  Пара: [bold]{pair_label(v['pair'])}[/bold]")
+    console.print("  [dim]Бот прогоняет записанные срезы стакана (раз в 2 с) "
+                  "через свои правила входа:\n  с текущими настройками пары "
+                  "и с несколькими вариантами рядом. Потеря на\n  исполнении "
+                  "берётся по реальным сделкам пары. Настройки не "
+                  "меняются.[/dim]\n")
+    choice = menu([(k, f"За {t}") for k, (_d, t) in BACKTEST_PERIODS.items()])
+    if choice not in BACKTEST_PERIODS:
+        return
+    days = BACKTEST_PERIODS[choice][0]
+    args = [PY, "tools/backtest.py", "--symbol", v["ticker"],
+            "--hedge-venue", v["venue"], "--days", str(days), "--compare"]
+    with console.status("  Считаю… (до минуты на неделю записей)"):
+        r = subprocess.run(args, capture_output=True, text=True, timeout=900)
+    out = (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()
+    header("Анализ · бэктест")
+    print(out)
+    print()
+    pause()
 
 
 TOTALS_PERIODS = {"1": (7, "неделя"), "2": (30, "месяц"),
