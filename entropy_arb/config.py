@@ -43,7 +43,7 @@ from .autonomy import AutonomyConf
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
-HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz")
+HEDGE_VENUES = ("lighter", "lighter-rh")
 
 # .env name prefix of each Lighter exchange's trading key
 LIGHTER_ENV_PREFIX = {"lighter-rh": "LIGHTER_", "lighter": "LIGHTER_CORE_"}
@@ -215,6 +215,7 @@ class Config:
     autocalib_last_ts: Optional[float] = None
     # autonomy (autonomy.py): floating centre, exit relief, calm opening
     autonomy: AutonomyConf = AutonomyConf()
+    nickname: str = ""
     # runtime
     hl_api_url: str = HL_API_URL
     hl_ws_url: str = HL_WS_URL
@@ -303,6 +304,9 @@ _SCHEMA: Dict[str, Any] = {
         "max_step_bps": float,
         "max_drift_bps": float,
         "min_hours": float,
+    },
+    "bot": {
+        "nickname": str,       # shown under the banner and in Telegram
     },
     "autonomy": {
         "enabled": bool,
@@ -491,24 +495,6 @@ def merge_ticker_profile(raw: dict, prof: dict) -> dict:
 EXEC_MODES = ("simultaneous", "entropy_first", "volume")
 
 
-def xyz_creds(record_only: bool = False) -> HLCreds:
-    """Keys of the trade.xyz leg. Its own pair HL_PRIVATE_KEY_XYZ +
-    HL_ACCOUNT_ADDRESS_XYZ (a separate wallet: its own Hyperliquid request
-    budget) when set, otherwise the Entropy keys (one account, both dexes).
-    Key and address always come as a pair — never one wallet's key with
-    another wallet's address. An address without a key is refused for
-    trading instead of being silently ignored."""
-    key, addr = _env_s("HL_PRIVATE_KEY_XYZ"), _env_s("HL_ACCOUNT_ADDRESS_XYZ")
-    if key:
-        return HLCreds(key, addr)     # addr None = the key's own wallet
-    if addr and not record_only:
-        raise ConfigError(
-            "HL_ACCOUNT_ADDRESS_XYZ is set without HL_PRIVATE_KEY_XYZ — fill "
-            "both or clear both (Settings → Keys) / адрес trade.xyz задан без "
-            "ключа: заполните оба или очистите оба (Настройки → Ключи)")
-    return HLCreds(_env_s("HL_PRIVATE_KEY"), _env_s("HL_ACCOUNT_ADDRESS"))
-
-
 def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 symbol: str, hedge_venue: str,
                 hedge_symbol: Optional[str] = None,
@@ -591,9 +577,6 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                           "tail / должно быть в диапазоне (0, 1]")
 
     entropy_dex = _get(raw, "entropy", "dex", "io")
-    if hedge_venue == "tradexyz" and entropy_dex == "xyz":
-        raise ConfigError("entropy.dex 'xyz' with hedge_venue 'tradexyz' is "
-                          "the same market on both legs / обе ноги — один и тот же рынок")
 
     entropy_names = split_names(tinfo.get("entropy_symbol")) or (symbol,)
     hedge_names = (split_names(hedge_symbol)
@@ -611,34 +594,23 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         hl_creds=entropy_hl_creds,
     )
 
-    if hedge_venue == "tradexyz":
-        hedge = VenueConf(
-            key="hedge", kind="hl", label="XYZ",
-            symbol=hedge_names[0], symbol_aliases=hedge_names,
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 1.0)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 120)),
-            hl_dex="xyz",
-            hl_creds=xyz_creds(record_only),
-        )
-    else:
-        # Lighter core and Lighter RH are separate exchanges: accounts, API
-        # keys, nonces and account indexes do not carry over, and a signature
-        # for one is rejected by the other. RH keeps the LIGHTER_* names it
-        # has always used here; core reads its own LIGHTER_CORE_* keys.
-        env = LIGHTER_ENV_PREFIX[hedge_venue]
-        hedge = VenueConf(
-            key="hedge", kind="lighter",
-            label="LIGHTER" if hedge_venue == "lighter" else "RH",
-            symbol=hedge_names[0], symbol_aliases=hedge_names,
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 0.0)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
-            lighter_profile=LIGHTER_PROFILES[hedge_venue],
-            lighter_creds=LighterCreds(_env_i(f"{env}ACCOUNT_INDEX"),
-                                       _env_i(f"{env}API_KEY_INDEX"),
-                                       _env_s(f"{env}API_PRIVATE_KEY")),
-        )
+    # Lighter core and Lighter RH are separate exchanges: accounts, API
+    # keys, nonces and account indexes do not carry over, and a signature
+    # for one is rejected by the other. RH keeps the LIGHTER_* names it
+    # has always used here; core reads its own LIGHTER_CORE_* keys.
+    env = LIGHTER_ENV_PREFIX[hedge_venue]
+    hedge = VenueConf(
+        key="hedge", kind="lighter",
+        label="LIGHTER" if hedge_venue == "lighter" else "RH",
+        symbol=hedge_names[0], symbol_aliases=hedge_names,
+        fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 0.0)),
+        cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
+        orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
+        lighter_profile=LIGHTER_PROFILES[hedge_venue],
+        lighter_creds=LighterCreds(_env_i(f"{env}ACCOUNT_INDEX"),
+                                   _env_i(f"{env}API_KEY_INDEX"),
+                                   _env_s(f"{env}API_PRIVATE_KEY")),
+    )
 
     # minute data: one file per ticker in profile mode — never the shared
     # config.yaml path, so different markets never mix in one file
@@ -786,9 +758,6 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         calibrated=calibrated,
         fee_checked=(bool(tinfo.get("fee_checked", False)) if ticker_file
                      else None),
-        hedge_fee_checked=(bool(tinfo.get("hedge_fee_checked", False))
-                           if ticker_file and hedge_venue == "tradexyz"
-                           else None),
         autocalib_enabled=bool(_get(raw, "autocalib", "enabled", False)),
         autocalib_window_hours=ac["window_hours"],
         autocalib_every_hours=ac["every_hours"],
@@ -814,4 +783,5 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         ticks_sec=ticks_sec,
         ticks_dir=str(_get(raw, "recorder", "ticks_dir", "logs/ticks")),
         autonomy=autonomy,
+        nickname=str(_get(raw, "bot", "nickname", "") or "").strip(),
     )

@@ -2102,6 +2102,9 @@ class Engine:
     async def _tg_send(self, text: str) -> None:
         if self.telegram is None:
             return
+        nick = getattr(self.cfg, "nickname", "")
+        if nick:
+            text = f"[{nick}] {text}"
         try:
             await asyncio.wait_for(self.telegram.send(text), 12.0)
         except Exception as e:

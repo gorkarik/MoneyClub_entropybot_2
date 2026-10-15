@@ -57,10 +57,12 @@ def test_minimal_defaults():
     assert cfg.recorder_enabled is True
 
 
-def test_tradexyz_hedge():
-    cfg = load(MINIMAL, hedge="tradexyz")
-    assert cfg.hedge.kind == "hl" and cfg.hedge.hl_dex == "xyz"
-    assert cfg.hedge.label == "XYZ"
+def test_tradexyz_hedge_removed():
+    try:
+        load(MINIMAL, hedge="tradexyz")
+    except ConfigError:
+        return
+    raise AssertionError("trade.xyz must no longer be accepted")
 
 
 def expect_error(yaml_text: str, needle: str, **kw):
