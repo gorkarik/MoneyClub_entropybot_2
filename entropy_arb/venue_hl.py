@@ -1,4 +1,4 @@
-"""Hyperliquid HIP-3 dex venue adapter (Entropy = dex "io", trade.xyz = "xyz").
+"""Hyperliquid HIP-3 dex venue adapter (Entropy = dex "io").
 
 Market metadata, account state and order posting use Hyperliquid's public
 /info and /exchange REST endpoints via plain aiohttp; the book comes from the

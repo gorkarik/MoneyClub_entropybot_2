@@ -33,8 +33,7 @@ log = logging.getLogger("dashboard")
 
 ALERT_ERROR_WINDOW_SEC = 600.0   # show the latest error for 10 minutes
 
-HEDGE_TITLES = {"lighter": "Lighter", "lighter-rh": "Lighter RH",
-                "tradexyz": "trade.xyz"}
+HEDGE_TITLES = {"lighter": "Lighter", "lighter-rh": "Lighter RH"}
 
 # Russian UI (keys are the English strings; anything missing stays English)
 _RU = {
@@ -94,11 +93,10 @@ _RU = {
     "Hyperliquid request limit: {v} ({h}) — at most 1 order per 10 s":
         "лимит запросов Hyperliquid: {v} ({h}) — не чаще 1 ордера в 10 с",
     "Hyperliquid request limit ({h}): both legs on one address — no "
-    "arbitrage; it only recovers with new volume on this address — use "
-    "separate trade.xyz keys":
+    "arbitrage; it only recovers with new volume on this address":
         "лимит запросов Hyperliquid ({h}): обе ноги на одном адресе — "
         "арбитраж стоит; лимит растёт только от нового оборота на этом "
-        "адресе — заведите отдельные ключи trade.xyz",
+        "адресе",
     "auto-calibration due: waits until the position is closed":
         "автокалибровка: пора, ждёт закрытия позиции",
     "auto-calibration: midline {m} (manual {a}), next check in {h} h":
@@ -286,7 +284,7 @@ class Dashboard:
                 out.append(self._t(
                     "Hyperliquid request limit ({h}): both legs on one "
                     "address — no arbitrage; it only recovers with new "
-                    "volume on this address — use separate trade.xyz keys",
+                    "volume on this address",
                     h=f"{h:+d}"))
             else:
                 out.append(self._t(
@@ -517,7 +515,9 @@ class Dashboard:
                 parts.append(Text(""))
             for n in nt:
                 parts.append(Text("• " + n, style="yellow"))
-        return Panel(Group(*parts), title="MoneyClub_entropybot_3", box=box.ROUNDED,
+        nick = getattr(eng.cfg, "nickname", "")
+        title = "MoneyClub_entropybot_3" + (f" · {nick}" if nick else "")
+        return Panel(Group(*parts), title=title, box=box.ROUNDED,
                      padding=(0, 1),
                      subtitle=self._t("Q — exit to the menu (the bot keeps "
                                       "running)"))

@@ -40,24 +40,19 @@ except ImportError:
 # Биржи хеджа (вторая нога; Entropy — всегда первая) и тикеры каждой.
 # Lighter RH и Lighter core — разные биржи: свои аккаунты, ключи, стаканы
 # и цены. Поэтому настройки — у каждой пары «биржа + тикер» свои.
-VENUES = ["lighter-rh", "lighter", "tradexyz"]
-VENUE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter",
-                "tradexyz": "trade.xyz"}
+VENUES = ["lighter-rh", "lighter"]
+VENUE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter"}
 VENUE_TICKERS = {
     "lighter-rh": ["SNDK", "ANTH", "OAI"],
     "lighter": ["SNDK", "ANTH", "OAI", "NBIS", "DRAM", "EWY"],
-    # trade.xyz — тоже Hyperliquid (dex xyz). Какие из тикеров там есть,
-    # меню проверяет по живому списку рынков перед выбором.
-    "tradexyz": ["SNDK", "ANTH", "OAI", "NBIS", "DRAM", "EWY"],
 }
 VENUE_BOOKS_URL = {
     "lighter-rh": "https://api.rh.lighter.xyz/api/v1/orderBooks",
     "lighter": "https://mainnet.zklighter.elliot.ai/api/v1/orderBooks",
 }
-HL_DEX = {"tradexyz": "xyz"}          # биржи хеджа на Hyperliquid: имя dex
-# комиссия тейкера биржи хеджа для новых пар: у Lighter 0 (документация),
-# у trade.xyz — стандартное значение, на живой сделке не измерено
-DEFAULT_HEDGE_FEE_BPS = {"tradexyz": 1.0}
+HL_DEX: dict = {}                     # биржи хеджа на Hyperliquid: имя dex
+# комиссия тейкера биржи хеджа для новых пар, если не 0 (у Lighter 0)
+DEFAULT_HEDGE_FEE_BPS: dict = {}
 
 # Начальные варианты имени рынка (Entropy, Lighter). Это только заготовка:
 # при первом выборе пары она записывается в tickers/<биржа>/<ТИКЕР>.yaml и
@@ -71,8 +66,6 @@ TICKER_SEED = {
     "DRAM": ("DRAM", "DRAM"),
     "EWY": ("EWY", "EWY"),
 }
-# имена на trade.xyz: тикер, затем полное имя — бот берёт первое найденное
-XYZ_SEED = {"ANTH": "ANTH, ANTHROPIC", "OAI": "OAI, OPENAI"}
 LEGACY_PAIR = ("lighter-rh", "SNDK")   # до выбора пар бот торговал только ею
 TICKERS_DIR = "tickers"
 CURRENT_PAIR_FILE = os.path.join(TICKERS_DIR, ".current")
@@ -309,7 +302,19 @@ def print_banner() -> None:
         if i == len(lines) - 1:
             t.append("  " + SUBTITLE, style="dim cyan")
         console.print(t)
+    nick = bot_nickname()
+    if nick:
+        console.print(Text("  " + nick, style="bold cyan"))
     console.print()
+
+
+def bot_nickname() -> str:
+    """Имя бота из config.yaml (bot.nickname): видно под заставкой и в
+    Telegram — чтобы различать несколько ботов."""
+    try:
+        return str((read_config().get("bot") or {}).get("nickname") or "").strip()
+    except Exception:
+        return ""
 
 
 def header(title: str = "") -> None:
@@ -349,6 +354,7 @@ def ensure_files() -> bool:
     except OSError:
         pass
     ensure_ticker_files()
+    _ensure_ticks_on()
     old = ""
     if os.path.exists(TMUX_CONF):
         with open(TMUX_CONF, encoding="utf-8") as fh:
@@ -403,7 +409,7 @@ def current_pair():
         with open(CURRENT_PAIR_FILE, encoding="utf-8") as fh:
             raw = fh.read().strip()
         venue, ticker = raw.split("/", 1) if "/" in raw else (LEGACY_PAIR[0], raw)
-        if os.path.exists(pair_path((venue, ticker))):
+        if venue in VENUES and os.path.exists(pair_path((venue, ticker))):
             return (venue, ticker)
     except (FileNotFoundError, ValueError):
         pass
@@ -444,20 +450,11 @@ def _pair_text(pair, entropy_name: str, hedge_names: str, base: dict,
         up = DEFAULT_THRESHOLDS["upper_bps"]
         lo = DEFAULT_THRESHOLDS["lower_bps"]
         csv_path = f"logs/minutes_{venue}_{ticker}.csv"
-    pos_e = float(ent.get("max_position_usd", DEFAULT_POSITION_USD))
-    pos_h = float(hed.get("max_position_usd", pos_e))
-    order = float(siz.get("max_order_notional_usd", DEFAULT_ORDER_USD))
     min_order = float(siz.get("min_order_notional_usd", 10.0))
-    if venue in DEFAULT_HEDGE_FEE_BPS:
-        # не берём hedge.taker_fee_bps из config.yaml: там 0 — это Lighter
-        hfee = DEFAULT_HEDGE_FEE_BPS[venue]
-        hfee_note = "комиссия trade.xyz, bps — стандартное значение, не измерена"
-        hfee_line = ("  hedge_fee_checked: false   # комиссия trade.xyz "
-                     "проверена на живой сделке по этой паре\n")
-    else:
-        hfee = float(hed.get("taker_fee_bps", 0.0))
-        hfee_note = f"комиссия {VENUE_TITLES.get(venue, venue)}, bps"
-        hfee_line = ""
+    hfee = float(DEFAULT_HEDGE_FEE_BPS.get(venue,
+                                           hed.get("taker_fee_bps", 0.0)))
+    hfee_note = f"комиссия {VENUE_TITLES.get(venue, venue)}, bps"
+    hfee_line = ""
     title = VENUE_TITLES.get(venue, venue)
     return f"""\
 # MONEY CLUB · настройки пары {ticker} · Entropy ↔ {title}
@@ -475,19 +472,82 @@ thresholds:
 
 entropy:
   taker_fee_bps: {fmt(fee)}        # комиссия Entropy в расчёте входа, bps (0 — не учитывать; меню: Настройки → Комиссии)
-  max_position_usd: {fmt(pos_e, True)}      # лимит позиции, $
 
 hedge:
   taker_fee_bps: {fmt(hfee)}         # {hfee_note}
-  max_position_usd: {fmt(pos_h, True)}      # лимит позиции, $ (меню держит равным Entropy)
 
+# лимит позиции и размер сделки — общие для всех пар, в config.yaml
 sizing:
-  max_order_notional_usd: {fmt(order, True)}   # максимум на одну сделку, $
   min_order_notional_usd: {fmt(min_order, True)}   # сделки меньше этой суммы не отправляются
 
 recorder:
   csv: {csv_path}       # минутные данные этой пары (только её рынок)
 """
+
+
+# Лимиты позиции и сделки — общие для всех пар (config.yaml). Раньше они
+# лежали в файле каждой пары; при первом запуске версии 3 значения текущей
+# пары переносятся в config.yaml, а из файлов пар убираются.
+LIMIT_KEYS = {("entropy", "max_position_usd"), ("hedge", "max_position_usd"),
+              ("sizing", "max_order_notional_usd")}
+_LIMIT_LINE_RE = re.compile(r"(?m)^[ \t]+(max_position_usd|max_order_notional_usd)"
+                            r"\s*:.*\n")
+
+
+def _section_value(text: str, section: str, key: str):
+    m = re.search(rf"(?ms)^{section}\s*:\s*\n(.*?)(?=^\S|\Z)", text)
+    if not m:
+        return None
+    k = re.search(rf"(?m)^\s+{key}\s*:\s*([0-9.]+)", m.group(1))
+    return k.group(1) if k else None
+
+
+def _migrate_pair_limits() -> None:
+    files = []
+    for root, _dirs, names in os.walk(TICKERS_DIR):
+        for name in names:
+            if name.endswith(".yaml"):
+                path = os.path.join(root, name)
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                if _LIMIT_LINE_RE.search(text):
+                    files.append((path, text))
+    if not files:
+        return
+    try:
+        with open(CURRENT_PAIR_FILE, encoding="utf-8") as fh:
+            cur = fh.read().strip()
+    except FileNotFoundError:
+        cur = ""
+    cur_path = pair_path(tuple(cur.split("/", 1))) if "/" in cur else ""
+    files.sort(key=lambda f: os.path.abspath(f[0]) != os.path.abspath(cur_path)
+               if cur_path else False)
+    src = files[0][1]
+    with open(CONFIG, encoding="utf-8") as fh:
+        base = fh.read()
+    new = base
+    for sec, key in sorted(LIMIT_KEYS):
+        val = _section_value(src, sec, key)
+        if val is not None:
+            new = _set_yaml_value(new, sec, key, val)
+    if new != base:
+        _atomic_write(CONFIG, new)
+    for path, text in files:
+        _atomic_write(path, _LIMIT_LINE_RE.sub("", text))
+
+
+def _ensure_ticks_on() -> None:
+    """Частый срез стаканов нужен бэктестеру — в версии 3 он всегда включён
+    (пункта меню больше нет)."""
+    try:
+        with open(CONFIG, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return
+    val = _section_value(text, "recorder", "ticks_sec")
+    if val is not None and float(val) == 0.0:
+        _atomic_write(CONFIG, _set_yaml_value(text, "recorder", "ticks_sec",
+                                              "2.0"))
 
 
 def _migrate_flat_ticker_files() -> None:
@@ -521,6 +581,8 @@ def ensure_ticker_files() -> None:
     бот торговал до сих пор; остальные — центр 0 (не откалиброваны)."""
     os.makedirs(TICKERS_DIR, exist_ok=True)
     _migrate_flat_ticker_files()
+    if os.path.exists(CONFIG):
+        _migrate_pair_limits()
     for root, _dirs, files in os.walk(TICKERS_DIR):
         for name in files:
             # take_fraction стал общим параметром (config.yaml) — убрать его
@@ -544,8 +606,6 @@ def ensure_ticker_files() -> None:
             if os.path.exists(path):
                 continue
             ent_name, hedge_names = TICKER_SEED[t]
-            if venue in HL_DEX:
-                hedge_names = XYZ_SEED.get(t, t)
             _atomic_write(path, _pair_text((venue, t), ent_name, hedge_names,
                                            base, legacy=((venue, t) ==
                                                          LEGACY_PAIR)))
@@ -628,6 +688,8 @@ from entropy_arb.yamledit import set_value as _set_yaml_value  # noqa: E402
 
 def _is_ticker_key(section: str, key: str) -> bool:
     from entropy_arb.config import _TICKER_SCHEMA
+    if (section, key) in LIMIT_KEYS:
+        return False                  # лимиты — общие для всех пар
     return key in (_TICKER_SCHEMA.get(section) or {})
 
 
@@ -680,16 +742,9 @@ VENUE_KEYS = {
     "lighter": ["LIGHTER_CORE_ACCOUNT_INDEX", "LIGHTER_CORE_API_KEY_INDEX",
                 "LIGHTER_CORE_API_PRIVATE_KEY"],
 }
-# trade.xyz — тоже Hyperliquid: без своих ключей бот торгует ногой trade.xyz
-# с ключами Entropy (один кошелёк, общий лимит запросов). Отдельный кошелёк
-# — по желанию: ключ и адрес задаются только парой.
-XYZ_KEYS = ["HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ"]
-OPTIONAL_KEYS = set(XYZ_KEYS)
-VENUE_KEYS["tradexyz"] = XYZ_KEYS
-ENV_KEYS = (COMMON_KEYS + VENUE_KEYS["lighter-rh"] + VENUE_KEYS["lighter"]
-            + XYZ_KEYS)
+ENV_KEYS = COMMON_KEYS + VENUE_KEYS["lighter-rh"] + VENUE_KEYS["lighter"]
 SECRET_KEYS = {"HL_PRIVATE_KEY", "LIGHTER_API_PRIVATE_KEY",
-               "LIGHTER_CORE_API_PRIVATE_KEY", "HL_PRIVATE_KEY_XYZ"}
+               "LIGHTER_CORE_API_PRIVATE_KEY"}
 
 KEY_INFO = {
     "HL_PRIVATE_KEY": (
@@ -722,19 +777,6 @@ KEY_INFO = {
         "Приватный ключ API Lighter (core)",
         "app.lighter.xyz → API keys → Private Key (обычно 80 символов). "
         "Ключ от Lighter RH сюда не подойдёт."),
-    "HL_PRIVATE_KEY_XYZ": (
-        "Приватный ключ API (agent) ОТДЕЛЬНОГО кошелька для trade.xyz — "
-        "необязательно",
-        "Не заполняйте — нога trade.xyz пойдёт с ключами Entropy (это тот же "
-        "Hyperliquid). Отдельный кошелёк нужен, чтобы у него был свой лимит "
-        "запросов Hyperliquid. Ключ создаётся на app.hyperliquid.xyz/API "
-        "ВТОРОГО кошелька. Формат: 0x + 64 символа. Заполняется вместе с "
-        "адресом ниже."),
-    "HL_ACCOUNT_ADDRESS_XYZ": (
-        "Адрес ОСНОВНОГО отдельного кошелька для trade.xyz — необязательно",
-        "Адрес второго кошелька, на котором лежат деньги для trade.xyz (не "
-        "адрес агента). Формат: 0x + 40 символов. Заполняется только вместе "
-        "с ключом выше."),
 }
 
 HEX = re.compile(r"^[0-9a-fA-F]+$")
@@ -788,11 +830,8 @@ def write_env(updates: dict) -> None:
 def validate_key(name: str, raw: str):
     """Возвращает (нормализованное_значение, ошибка_или_None, мягкое_предупреждение)."""
     v = raw.strip().strip("\"'").replace(" ", "")
-    # ключи Lighter core проверяются по тем же правилам, что и RH, ключи
-    # trade.xyz — по правилам Hyperliquid
+    # ключи Lighter core проверяются по тем же правилам, что и RH
     name = name.replace("LIGHTER_CORE_", "LIGHTER_")
-    if name.endswith("_XYZ"):
-        name = name[:-4]
     if name == "HL_PRIVATE_KEY":
         if HEX.match(v) and len(v) == 64:
             v = "0x" + v
@@ -837,32 +876,13 @@ def validate_key(name: str, raw: str):
     return v, None, None
 
 
-def xyz_keys_mode(env: dict = None):
-    """Ключи ноги trade.xyz: "shared" — оба пусты (ключи Entropy), "own" —
-    заполнены оба и корректны, "broken" — один без другого или с ошибкой."""
-    env = read_env() if env is None else env
-    vals = [env.get(k, "") for k in XYZ_KEYS]
-    if not any(vals):
-        return "shared"
-    if all(vals) and all(validate_key(k, env[k])[1] is None
-                         for k in XYZ_KEYS):
-        return "own"
-    return "broken"
-
-
 def keys_state(venue: str = None):
     """{имя: (заполнен, корректен)}, all_ok — для биржи venue (ключи
-    Hyperliquid + ключи этой биржи хеджа); без venue — все ключи.
-    Необязательные ключи trade.xyz: пустые — это не ошибка, но заполнять
-    их можно только парой."""
+    Hyperliquid + ключи этой биржи хеджа); без venue — все ключи."""
     env = read_env()
     state = {}
-    xyz = xyz_keys_mode(env)
     for k in (COMMON_KEYS + VENUE_KEYS[venue] if venue else ENV_KEYS):
         v = env.get(k, "")
-        if k in OPTIONAL_KEYS:
-            state[k] = (bool(v), xyz != "broken")
-            continue
         if not v:
             state[k] = (False, False)
             continue
@@ -996,15 +1016,11 @@ def explain_error(text: str) -> str:
     if "not calibrated" in t:
         return ("Пара не откалибрована (центр = 0). Сначала тестовая запись, "
                 "затем Анализ → Калибровка.")
-    if "not found on" in t or ("not found" in t and ("io:" in t
-                                                      or "xyz:" in t)):
+    if "not found on" in t or ("not found" in t and "io:" in t):
         return ("Тикер не найден на одной из бирж. Имена рынков — в файле "
                 "tickers/<биржа>/<ТИКЕР>.yaml.")
     if "delisted" in t:
-        return "Рынок снят с торгов на Entropy или trade.xyz."
-    if "hl_account_address_xyz" in t:
-        return ("Адрес trade.xyz задан без ключа. Настройки → Ключи: "
-                "заполните оба или очистите оба.")
+        return "Рынок снят с торгов на Entropy."
     if "config error" in t:
         return "Ошибка в настройках (config.yaml)."
     if any(x in t for x in ("clientresponseerror", "clientconnectorerror",
@@ -1147,8 +1163,7 @@ def _f(row, key):
 
 STOP_REASONS = {"manual": "вручную (Стоп)", "loss_limit": "СТОП ПО УБЫТКУ",
                 "errors": "аварийный стоп (ошибки подряд)"}
-HEDGE_TITLES = {"lighter": "Lighter", "lighter-rh": "Lighter RH",
-                "tradexyz": "trade.xyz"}
+HEDGE_TITLES = {"lighter": "Lighter", "lighter-rh": "Lighter RH"}
 
 
 def session_report_lines(row) -> list:
@@ -1429,7 +1444,7 @@ def action_start() -> None:
         where = "" if bots[0].ours else f" (запущен вручную из {bots[0].cwd})"
         console.print(f"  Бот уже работает{where}. Второй запускать нельзя — "
                       f"он торговал бы теми же ключами.\n"
-                      f"  Сначала остановите его: пункт 2 — Стоп.")
+                      f"  Сначала остановите его: пункт 3 — Стоп.")
         pause()
         return
     header("Старт")
@@ -1494,22 +1509,6 @@ def start_checklist(pair):
             console.print("     [dim]Lighter core — отдельная биржа: нужен свой "
                           "аккаунт и API-ключ с app.lighter.xyz\n     (ключи "
                           "Lighter RH там не работают).[/dim]")
-        if venue == "tradexyz" and xyz_keys_mode() == "broken":
-            console.print("     [dim]Ключи trade.xyz: нужны оба — ключ и "
-                          "адрес, или очистите оба (Настройки → Ключи).[/dim]")
-    if venue == "tradexyz":
-        mode = xyz_keys_mode()
-        if mode == "own":
-            console.print("   [green]✔[/green] trade.xyz — отдельный кошелёк, "
-                          "свой лимит запросов Hyperliquid")
-        elif mode == "shared":
-            console.print("   [yellow]![/yellow] trade.xyz торгует с ключами "
-                          "Entropy: лимит запросов Hyperliquid общий для\n     "
-                          "обеих ног. Если он исчерпается, арбитраж встанет. "
-                          "Отдельный кошелёк — Настройки → Ключи.")
-        console.print("   [yellow]![/yellow] Деньги (USDC) для trade.xyz должны "
-                      "лежать на dex trade.xyz — проверьте\n     в интерфейсе "
-                      "Hyperliquid до первой сделки.")
     if v["midline_bps"] != 0:
         console.print(f"   [green]✔[/green] Калибровка: центр "
                       f"{fmt(v['midline_bps'])}, +{fmt(v['upper_bps'])} / "
@@ -1642,14 +1641,14 @@ def open_dashboard(skip_intro: bool = False) -> None:
     if not bots:
         header("Дашборд")
         console.print("  Бот не запущен — смотреть пока нечего.\n"
-                      "  Запустите его: пункт 1 — Старт.")
+                      "  Запустите его: пункт 2 — Старт.")
         pause()
         return
     if not tmux_has_session() or not any(b.ours for b in bots):
         header("Дашборд")
         console.print("  Бот запущен не из меню, поэтому его дашборд открывается "
                       "только там,\n  где его запускали. Чтобы видеть дашборд "
-                      "отсюда: пункт 2 — Стоп, затем пункт 1 — Старт.")
+                      "отсюда: пункт 3 — Стоп, затем пункт 2 — Старт.")
         pause()
         return
     if not skip_intro:
@@ -1690,8 +1689,8 @@ def action_analysis() -> None:
                              "откуда убыток или прибыль"),
                        ("3", "Итоги по периодам — объём, заработок, убыток "
                              "за неделю, месяц, всё время"),
-                       ("4", "Связь с биржами — замер задержки с этого "
-                             "сервера"),
+                       ("4", "Пинг до бирж — задержка с этого сервера и "
+                             "история замеров"),
                        ("5", "Сменить пару — другая пара для Анализа, "
                              "Настроек и Старта")])
         if choice == "1":
@@ -1739,11 +1738,12 @@ def action_totals() -> None:
 
 def action_latency() -> None:
     """Замер связи: tools/latency.py — время ответа API бирж отсюда."""
-    header("Анализ · связь с биржами")
+    header("Анализ · пинг до бирж")
     console.print("  [dim]Меряю, сколько миллисекунд идёт запрос с этого "
                   "сервера до каждой биржи и обратно\n  (по 5 замеров, "
                   "берётся медиана). Ключи не нужны, работающему боту не "
-                  "мешает.[/dim]\n")
+                  "мешает.\n  Замер сохраняется в logs/latency.csv — ниже "
+                  "видны прошлые замеры для сравнения.[/dim]\n")
     with console.status("  Замеряю (до 30 секунд)…"):
         try:
             r = subprocess.run([PY, "tools/latency.py"], capture_output=True,
@@ -2083,18 +2083,18 @@ def action_settings() -> None:
                           "«биржа + тикер» свои[/dim]")
             items = [
                 ("1", "Пороги входа — центр, выше, ниже"),
-                ("2", "Лимиты позиции и сделки" + (
-                    f" — сейчас {usd(v['pos_entropy'])} / {usd(v['order'])}"
-                    if v else "")),
-                ("3", "Комиссии" + (f" — Entropy в расчёте "
+                ("2", "Комиссии" + (f" — Entropy в расчёте "
                                     f"{fmt(v['fee_entropy'])} bps" if v else "")),
-                ("4", "Сменить пару — другая пара для Настроек, Анализа и "
+                ("3", "Сменить пару — другая пара для Настроек, Анализа и "
                       "Старта"),
             ]
             for key, label in items:
                 console.print(f"  {key}  {label}", markup=False)
             lim = v["max_loss_pct"] if v else 0
             common = [
+                ("4", "Лимиты позиции и сделки" + (
+                    f" — сейчас {usd(v['pos_entropy'])} / {usd(v['order'])}"
+                    if v else "")),
                 ("5", "Стратегия" + (f" — сейчас {strategy_label(v['exec_mode'])}"
                                      if v else "")),
                 ("6", "Стоп по убытку" + ((" — " + (f"{fmt(lim)}% за сессию"
@@ -2103,21 +2103,21 @@ def action_settings() -> None:
                 ("7", "Исполнение — параметры входа и цены"),
                 ("8", "Ключи бирж (.env)"),
                 ("9", "Telegram — уведомления и /status"),
-                ("10", "Запись данных — частый срез стаканов"),
-                ("11", "Автокалибровка центра" + (
+                ("10", "Автокалибровка центра" + (
                     (" — " + ("включена" if v["autocalib"] else "выключена"))
                     if v else "")),
-                ("12", "Запросы Hyperliquid — проверить запас и докупить"),
+                ("11", "Имя бота" + (f" — {bot_nickname()}" if bot_nickname()
+                                     else " — не задано")),
             ]
             console.print("\n  [bold]Общие для всех пар[/bold]")
             choice = menu(common)
-            actions = {"1": thresholds_menu, "2": limits_menu,
-                       "3": fee_menu,
-                       "4": lambda: pick_pair_for_menus("Настройки · пара"),
+            actions = {"1": thresholds_menu, "2": fee_menu,
+                       "3": lambda: pick_pair_for_menus("Настройки · пара"),
+                       "4": limits_menu,
                        "5": strategy_menu, "6": loss_menu,
                        "7": execution_menu, "8": keys_menu,
-                       "9": telegram_menu, "10": ticks_menu,
-                       "11": autocalib_menu, "12": hl_requests_menu}
+                       "9": telegram_menu, "10": autocalib_menu,
+                       "11": nickname_menu}
             try:
                 if choice == "0":
                     break
@@ -2225,10 +2225,26 @@ LIMITS_HELP = """  [dim][bold]Лимит позиции[/bold] — больше 
 """
 
 
+NICK_MAX = 30
+
+
+def nickname_menu() -> None:
+    header("Настройки · имя бота")
+    cur = bot_nickname()
+    console.print(f"  Сейчас: [bold]{cur or 'не задано'}[/bold]\n")
+    console.print("  [dim]Имя видно под заставкой MONEY CLUB и в сообщениях "
+                  "Telegram — удобно,\n  когда ботов несколько. Пустая строка "
+                  "— убрать имя.[/dim]\n")
+    raw = ask("  Новое имя › ").strip()
+    raw = re.sub(r"[\x00-\x1f\"\\\\#]", "", raw)[:NICK_MAX]
+    apply_changes([("bot", "nickname", f'"{raw}"')])
+    pause()
+
+
 def limits_menu() -> None:
     while True:
         v = cfg_values()
-        header(f"Настройки · лимиты · {pair_label(v['pair'])}")
+        header("Настройки · лимиты · общие для всех пар")
         console.print(f"  Лимит позиции:  [bold]{usd(v['pos_entropy'])}[/bold] "
                       f"на каждой бирже")
         if v["pos_entropy"] != v["pos_hedge"]:
@@ -2432,69 +2448,7 @@ def execution_menu() -> None:
 DEFAULT_TICKS_SEC = 2.0
 
 
-def ticks_values():
-    rec = read_config().get("recorder") or {}
-    return (float(rec.get("ticks_sec", DEFAULT_TICKS_SEC)),
-            str(rec.get("ticks_dir", "logs/ticks")))
-
-
-def ticks_disk_usage(directory: str):
-    """(файлов, байт) в папке частого среза."""
-    n = size = 0
-    try:
-        for name in os.listdir(directory):
-            p = os.path.join(directory, name)
-            if os.path.isfile(p):
-                n += 1
-                size += os.path.getsize(p)
-    except FileNotFoundError:
-        pass
-    return n, size
-
-
-def ticks_menu() -> None:
-    while True:
-        sec, directory = ticks_values()
-        header("Настройки · запись данных")
-        console.print("  [dim]Кроме минутной записи (для калибровки) бот может "
-                      "раз в несколько секунд\n  записывать стаканы обеих бирж: "
-                      "лучшие цены, объёмы и цену сделки на\n  максимальный "
-                      "размер. Это данные для будущего бэктестера — проверки "
-                      "порогов\n  на истории. Пишется в любом режиме, по файлу "
-                      "на пару и день; вчерашние\n  файлы сжимаются. Общий "
-                      "параметр для всех пар.[/dim]\n")
-        state = (f"раз в {fmt(sec)} с" if sec > 0
-                 else "[yellow]выключен[/yellow]")
-        console.print(f"  ticks_sec [dim](как часто записывать срез)[/dim]: "
-                      f"[bold]{state}[/bold]")
-        n, size = ticks_disk_usage(directory)
-        console.print(f"  [dim]Папка {directory}: файлов {n}, "
-                      f"{size / 1e6:.1f} МБ. При 2 с — около 7 МБ в сутки, "
-                      f"после сжатия 1–2 МБ.[/dim]\n")
-        choice = menu([("1", "Изменить частоту (0 — выключить)"),
-                       ("2", f"Вернуть по умолчанию (раз в "
-                             f"{fmt(DEFAULT_TICKS_SEC)} с)")])
-        if choice == "0":
-            return
-        if choice == "1":
-            console.print()
-            while True:
-                new = ask_number("Раз в сколько секунд (0 — выключить)", sec)
-                if new == 0 or 1 <= new <= 60:
-                    break
-                console.print("  [dim]0 или от 1 до 60 секунд.[/dim]")
-        elif choice == "2":
-            new = DEFAULT_TICKS_SEC
-        else:
-            continue
-        if new == sec:
-            continue
-        apply_changes([("recorder", "ticks_sec", fmt(new))])
-        pause()
-
-
 # --------------------------------------------------------------- стратегия
-
 # Стратегия = как бот входит в сделку (execution.mode). Выбирается одна.
 # Защита — дополнительные фильтры к любой стратегии, по умолчанию выключены.
 DEFAULT_EF_SLIP_BPS = 5.0
@@ -2895,77 +2849,6 @@ HL_BUY_CHOICES = [(2000, "2 000"), (5000, "5 000"), (10000, "10 000")]
 HL_REQUEST_PRICE = 0.0005         # USDC за один запрос (Hyperliquid)
 
 
-def hl_requests_menu() -> None:
-    """Запас запросов Hyperliquid: показать и докупить."""
-    xyz = xyz_keys_mode() == "own"
-    while True:
-        header("Настройки · запросы Hyperliquid")
-        console.print("  [dim]Каждый ордер бота на Hyperliquid — исполнился он "
-                      "или нет — тратит один запрос.\n  Лимит адреса: 10 000 + "
-                      "1 запрос за каждый $1 оборота на нём. Если лимит\n  "
-                      "исчерпан, биржа пропускает примерно 1 ордер в 10 секунд "
-                      "— бот почти стоит.\n  Докупить можно у самой биржи: "
-                      f"${HL_REQUEST_PRICE} за запрос, 2 000 запросов ≈ $1.\n"
-                      "  Деньги списываются с баланса USDC этого адреса на "
-                      "Hyperliquid.[/dim]\n")
-        args = [PY, "tools/hl_requests.py", "status"]
-        which = [("main", "")]
-        if xyz:
-            which.append(("xyz", "--xyz"))
-        for name, flag in which:
-            if name == "xyz":
-                console.print("  [bold]Кошелёк trade.xyz[/bold]")
-            with console.status("  Читаю лимит…"):
-                try:
-                    r = subprocess.run(args + ([flag] if flag else []),
-                                       capture_output=True, text=True,
-                                       timeout=30)
-                    out = (r.stdout + r.stderr).strip()
-                except subprocess.TimeoutExpired:
-                    out = "Hyperliquid не ответил за 30 секунд."
-            console.print("  " + out.replace("\n", "\n  "), markup=False)
-            console.print()
-        items = [(str(i), f"Купить {label} запросов (≈ ${n * HL_REQUEST_PRICE:g})")
-                 for i, (n, label) in enumerate(HL_BUY_CHOICES, 1)]
-        items.append(("4", "Своё количество"))
-        choice = menu(items)
-        if choice == "0":
-            return
-        if choice in ("1", "2", "3"):
-            n = HL_BUY_CHOICES[int(choice) - 1][0]
-        elif choice == "4":
-            while True:
-                n = int(ask_number("Сколько запросов купить", 2000))
-                if 1 <= n <= 100000:
-                    break
-                console.print("  [dim]От 1 до 100 000.[/dim]")
-        else:
-            continue
-        flag = ""
-        if xyz:
-            w = menu([("1", "Основной кошелёк (Entropy)"),
-                      ("2", "Кошелёк trade.xyz")])
-            if w not in ("1", "2"):
-                continue
-            flag = "--xyz" if w == "2" else ""
-        if not live_deps_ok():
-            console.print("  [red]Не установлены библиотеки для торговли — "
-                          "запустите Старт → режим торговли,\n  меню "
-                          "предложит установить.[/red]")
-            pause()
-            continue
-        if not confirm(f"Купить {n:,} запросов за ≈ ${n * HL_REQUEST_PRICE:.2f} "
-                       f"USDC?", default=False):
-            continue
-        with console.status("  Покупаю…"):
-            r = subprocess.run([PY, "tools/hl_requests.py", "buy", str(n),
-                                "--yes"] + ([flag] if flag else []),
-                               capture_output=True, text=True, timeout=60)
-        console.print("\n  " + (r.stdout + r.stderr).strip()
-                      .replace("\n", "\n  "), markup=False)
-        pause()
-
-
 TG_API = "https://api.telegram.org/bot{token}/{method}"
 TG_TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
 
@@ -3135,24 +3018,15 @@ def fee_mode_label(fee: float) -> str:
 def fee_menu() -> None:
     while True:
         v = cfg_values()
-        t = v["ticker"]
         venue = v["venue"]
         title = VENUE_TITLES.get(venue, venue)
-        xyz = venue in DEFAULT_HEDGE_FEE_BPS
         header(f"Настройки · комиссии · {pair_label(v['pair'])}")
         fee = v["fee_entropy"]
         console.print(f"  Комиссия Entropy в расчёте: [bold]{fmt(fee)} bps"
                       f"[/bold] — {fee_mode_label(fee)}")
-        if xyz:
-            h_checked = ("[green]проверена на живой сделке[/green]"
-                         if v["hedge_fee_checked"] else
-                         "[yellow]стандартное значение, не измерена[/yellow]")
-            console.print(f"  Комиссия {title}: {fmt(v['fee_hedge'])} bps — "
-                          f"{h_checked}\n")
-        else:
-            console.print(f"  Комиссия {title}: {fmt(v['fee_hedge'])} bps "
-                          f"[dim](у Lighter комиссии нет — менять не нужно)"
-                          f"[/dim]\n")
+        console.print(f"  Комиссия {title}: {fmt(v['fee_hedge'])} bps "
+                      f"[dim](у Lighter комиссии нет — менять не нужно)"
+                      f"[/dim]\n")
         console.print(f"""  [dim]Это число влияет только на то, [bold]когда[/bold] бот входит: он прибавляет
   комиссию к порогу входа. Больше число — меньше сделок, но у каждой есть запас.
   Сколько биржа реально спишет, от этого числа не зависит.
@@ -3170,12 +3044,6 @@ def fee_menu() -> None:
             console.print(f"     [dim]{note}[/dim]")
             items.append(str(i))
         console.print("  4  Своё значение")
-        if xyz:
-            console.print(f"  5  Изменить комиссию {title}")
-            console.print(f"  6  " + (f"Снять отметку «проверена» с комиссии "
-                                       f"{title}" if v["hedge_fee_checked"]
-                                       else f"Отметить: комиссия {title} "
-                                            f"проверена на живой сделке"))
         console.print("  0  Назад\n")
         choice = ask()
         if choice == "0":
@@ -3191,18 +3059,6 @@ def fee_menu() -> None:
             if new is None or new == fee:
                 continue
             changes.append(("entropy", "taker_fee_bps", fmt(new)))
-        elif choice == "5" and xyz:
-            new = ask_fee(f"Комиссия {title}, bps", v["fee_hedge"])
-            if new is None:
-                continue
-            changes.append(("hedge", "taker_fee_bps", fmt(new)))
-            checked_now = confirm(f"Это значение проверено на живой сделке "
-                                  f"по {t}?", default=False)
-            changes.append(("ticker", "hedge_fee_checked",
-                            "true" if checked_now else "false"))
-        elif choice == "6" and xyz:
-            changes.append(("ticker", "hedge_fee_checked",
-                            "false" if v["hedge_fee_checked"] else "true"))
         else:
             continue
         apply_changes(changes)
@@ -3243,52 +3099,29 @@ def keys_menu() -> None:
         groups = [("Hyperliquid (Entropy)", COMMON_KEYS),
                   ("Lighter RH", VENUE_KEYS["lighter-rh"]),
                   ("Lighter (core) — нужны только для торговли через core",
-                   VENUE_KEYS["lighter"]),
-                  ("trade.xyz — необязательно, отдельный кошелёк",
-                   XYZ_KEYS)]
-        xyz = xyz_keys_mode(env)
+                   VENUE_KEYS["lighter"])]
         i = 0
         for title, keys in groups:
             console.print(f"  [bold]{title}[/bold]")
             for k in keys:
                 i += 1
                 filled, ok = state[k]
-                if k in OPTIONAL_KEYS and not filled:
-                    # пустой необязательный ключ — норма, если пуста и пара
-                    mark = "[dim]·[/dim]" if ok else "[red]✘[/red]"
-                    shown = "не задан"
-                else:
-                    mark = "[green]✔[/green]" if ok else (
-                        "[red]✘[/red]" if filled else "[dim]·[/dim]")
-                    shown = mask(k, env.get(k, ""))
+                mark = "[green]✔[/green]" if ok else (
+                    "[red]✘[/red]" if filled else "[dim]·[/dim]")
+                shown = mask(k, env.get(k, ""))
                 console.print(f"  {i:<2} {mark} {k:<29} [dim]{shown}[/dim]")
-            if keys is XYZ_KEYS:
-                note = {"shared": "[dim]не заданы — trade.xyz торгует с "
-                                  "ключами Entropy (лимит запросов общий)"
-                                  "[/dim]",
-                        "own": "[green]отдельный кошелёк для trade.xyz — свой "
-                               "лимит запросов[/green]",
-                        "broken": "[red]нужны оба: ключ и адрес — или очистите "
-                                  "оба[/red]"}[xyz]
-                console.print(f"     {note}")
             console.print()
         n = len(ENV_KEYS)
         console.print(f"  {n + 1:<2} Ввести по порядку: Hyperliquid + "
                       f"Lighter RH", markup=False)
         console.print(f"  {n + 2:<2} Ввести по порядку: Lighter (core)",
                       markup=False)
-        console.print(f"  {n + 3:<2} Ввести по порядку: отдельный кошелёк "
-                      f"trade.xyz", markup=False)
-        if xyz != "shared":
-            console.print(f"  {n + 4:<2} Очистить ключи trade.xyz (торговать "
-                          f"с ключами Entropy)", markup=False)
         console.print("  0  Назад\n", markup=False)
         choice = ask()
         if choice == "0":
             return
         seqs = {str(n + 1): ("lighter-rh", COMMON_KEYS + VENUE_KEYS["lighter-rh"]),
-                str(n + 2): ("lighter", VENUE_KEYS["lighter"]),
-                str(n + 3): ("tradexyz", XYZ_KEYS)}
+                str(n + 2): ("lighter", VENUE_KEYS["lighter"])}
         if choice in seqs:
             venue, seq = seqs[choice]
             for k in seq:
@@ -3297,27 +3130,10 @@ def keys_menu() -> None:
             check_agent_address()
             header("Настройки · ключи")
             _, all_ok = keys_state(venue)
-            if venue == "tradexyz":
-                mode = xyz_keys_mode()
-                console.print({
-                    "own": "  [green]✔ Отдельный кошелёк для trade.xyz "
-                           "задан.[/green]",
-                    "shared": "  Ключи trade.xyz не заданы — будут "
-                              "использоваться ключи Entropy.",
-                    "broken": "  [yellow]Нужны оба значения: ключ и адрес. "
-                              "Пока заполнено только одно — торговля через "
-                              "trade.xyz не запустится.[/yellow]"}[mode])
-            else:
-                console.print(f"  [green]✔ Ключи для {VENUE_TITLES[venue]} "
-                              f"заполнены.[/green]" if all_ok
-                              else "  [yellow]Не все ключи заполнены.[/yellow]")
+            console.print(f"  [green]✔ Ключи для {VENUE_TITLES[venue]} "
+                          f"заполнены.[/green]" if all_ok
+                          else "  [yellow]Не все ключи заполнены.[/yellow]")
             pause()
-        elif choice == str(n + 4) and xyz != "shared":
-            if confirm("Очистить ключи trade.xyz? Нога trade.xyz будет "
-                       "торговать с ключами Entropy.", default=False):
-                write_env({k: "" for k in XYZ_KEYS})
-                console.print("  [green]✔ Очищено.[/green]")
-                pause()
         elif choice.isdigit() and 1 <= int(choice) <= n:
             edit_key(ENV_KEYS[int(choice) - 1])
             check_agent_address()
@@ -3363,8 +3179,7 @@ def edit_key(name: str) -> bool:
 
 def check_agent_address() -> None:
     env = read_env()
-    for kname, aname in (("HL_PRIVATE_KEY", "HL_ACCOUNT_ADDRESS"),
-                         ("HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ")):
+    for kname, aname in (("HL_PRIVATE_KEY", "HL_ACCOUNT_ADDRESS"),):
         pk, addr = env.get(kname, ""), env.get(aname, "")
         if not pk or not addr or validate_key(kname, pk)[1] or \
                 validate_key(aname, addr)[1]:
@@ -3400,12 +3215,12 @@ def main() -> None:
         sys.exit(1)
     if ensure_files():
         first_run_prompt()
-    actions = {"1": action_start, "2": action_stop, "3": open_dashboard,
+    actions = {"1": open_dashboard, "2": action_start, "3": action_stop,
                "4": action_analysis, "5": action_settings}
     while True:
         try:
             main_screen()
-            choice = menu([("1", "Старт"), ("2", "Стоп"), ("3", "Дашборд"),
+            choice = menu([("1", "Дашборд"), ("2", "Старт"), ("3", "Стоп"),
                            ("4", "Анализ"), ("5", "Настройки")],
                           back_label="Выход")
         except Back:

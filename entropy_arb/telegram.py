@@ -20,8 +20,7 @@ import aiohttp
 log = logging.getLogger("telegram")
 
 API = "https://api.telegram.org/bot{token}/{method}"
-VENUE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter",
-                "tradexyz": "trade.xyz"}
+VENUE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter"}
 HELP = ("Команды:\n"
         "/status — состояние бота: пара, режим, результат, позиции, премия\n"
         "/pnl — результат текущей сессии\n\n"
@@ -270,8 +269,7 @@ def status_text(eng) -> str:
         if getattr(eng, "hl_shared", False):
             lines.append(f"Лимит запросов Hyperliquid исчерпан ({h:+d}): обе "
                          f"ноги на одном адресе — арбитраж стоит. Лимит "
-                         f"растёт только от нового оборота на этом адресе; "
-                         f"выход — отдельные ключи trade.xyz")
+                         f"растёт только от нового оборота на этом адресе")
         else:
             lines.append(f"Лимит запросов Hyperliquid исчерпан ({h:+d}) — не "
                          f"чаще 1 ордера в 10 с")

@@ -112,8 +112,7 @@ def main() -> None:
     p.add_argument("--fees-bps", type=float, default=0.0,
                    help="SUM of both venues' taker fees in bps (each crossing "
                         "pays both legs); recorded edges are pre-fee, so this "
-                        "is subtracted before counting firings (default 0.0 — "
-                        "pass ~1.0 with a tradexyz hedge)")
+                        "is subtracted before counting firings (default 0.0)")
     args = p.parse_args()
 
     if args.hint:

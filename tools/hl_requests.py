@@ -9,8 +9,8 @@ lets through about one order per 10 seconds, and the bot practically stops.
 Лимит запросов Hyperliquid: проверить и докупить.
 
 Usage:
-    python3 tools/hl_requests.py status [--xyz]
-    python3 tools/hl_requests.py buy N [--xyz] --yes
+    python3 tools/hl_requests.py status
+    python3 tools/hl_requests.py buy N --yes
 """
 from __future__ import annotations
 
@@ -37,16 +37,11 @@ def post(path: str, payload: dict) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
-def keys(xyz: bool):
+def keys():
     """(private key, account address) from .env — the same rule as the bot:
     the address may be empty (then it is the key's own wallet)."""
     from dotenv import load_dotenv
     load_dotenv(".env")
-    if xyz:
-        k = (os.getenv("HL_PRIVATE_KEY_XYZ") or "").strip()
-        a = (os.getenv("HL_ACCOUNT_ADDRESS_XYZ") or "").strip()
-        if k:
-            return k, a
     return ((os.getenv("HL_PRIVATE_KEY") or "").strip(),
             (os.getenv("HL_ACCOUNT_ADDRESS") or "").strip())
 
@@ -103,11 +98,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["status", "buy"])
     ap.add_argument("n", nargs="?", type=int, default=0)
-    ap.add_argument("--xyz", action="store_true",
-                    help="the trade.xyz wallet (HL_*_XYZ keys)")
     ap.add_argument("--yes", action="store_true")
     a = ap.parse_args()
-    key, addr0 = keys(a.xyz)
+    key, addr0 = keys()
     addr = address(key, addr0)
     if a.cmd == "status":
         show(addr)
