@@ -35,6 +35,9 @@ except ImportError:
           "Запустите установку ещё раз той же командой, которой ставили бота.")
     sys.exit(1)
 
+from entropy_arb.strategy import (VOLUME_MAX_COST_USD,  # noqa: E402
+                                  miss_warning, volume_narrow_bps)
+
 # ---------------------------------------------------------------- константы
 
 # Биржи хеджа (вторая нога; Entropy — всегда первая) и тикеры каждой.
@@ -650,10 +653,10 @@ def cfg_values(pair=None) -> dict:
             "entropy_first_slip_bps", 5.0)),
         "max_excess": float((c.get("execution") or {}).get(
             "max_excess_bps", 0.0)),
-        "vol_narrow": float((c.get("execution") or {}).get(
-            "volume_narrow_bps", 1.0)),
-        "vol_cost": float((c.get("execution") or {}).get(
-            "volume_max_cost_usd", 2.0)),
+        # стратегия 3: сужение и потолок цены вшиты (strategy.py)
+        "vol_narrow": volume_narrow_bps(float(thr.get("upper_bps", 0.0)),
+                                        float(thr.get("lower_bps", 0.0))),
+        "vol_cost": VOLUME_MAX_COST_USD,
         "leg_slip": float((c.get("execution") or {}).get(
             "leg_slippage_bps", 50.0)),
         "slipgate": bool((c.get("slipgate") or {}).get("enabled", False)),
@@ -2452,8 +2455,6 @@ DEFAULT_TICKS_SEC = 2.0
 # Стратегия = как бот входит в сделку (execution.mode). Выбирается одна.
 # Защита — дополнительные фильтры к любой стратегии, по умолчанию выключены.
 DEFAULT_EF_SLIP_BPS = 5.0
-DEFAULT_VOLUME_NARROW_BPS = 1.0
-DEFAULT_VOLUME_MAX_COST = 2.0
 DEFAULT_MAX_EXCESS_ON = 6.0       # предлагаемое значение при включении
 
 
@@ -2497,7 +2498,7 @@ def strategy_texts(venue_title: str, v: dict) -> dict:
             f"каждый промах тратит\nодин запрос Hyperliquid. На живых биржах "
             f"проверена мало — начните с малого\nобъёма и стопа по убытку."),
         "volume": (
-            "больше объёма, но не дороже заданной цены",
+            "больше объёма, но не дороже $1 за $10 000",
             f"Для тех, кому важен объём (поинты бирж, возврат комиссии), но "
             f"не любой ценой.\nИсполнение — как в стратегии 2 (сначала "
             f"Entropy, предел {ef} bps). Отличия:\n"
@@ -2506,12 +2507,12 @@ def strategy_texts(venue_title: str, v: dict) -> dict:
             f" • бот сам считает, во сколько ему обходятся $10 000 объёма "
             f"на Entropy\n   (сколько потеряно на этот объём по последним 50 "
             f"сделкам пары).\n   Пока цена выше вашего предела (сейчас "
-            f"${fmt(v['vol_cost'], True)}), бот открывает новые\n   позиции только "
+            f"${fmt(v['vol_cost'], True)}, вшит), бот открывает новые\n   позиции только "
             f"при большей премии — ровно на превышение. Закрытие позиций\n"
             f"   не сдерживается никогда.\n\n"
-            f"Пример: предел $2, по сделкам выходит $3 за $10 000 → к порогу "
+            f"Пример: предел $1, по сделкам выходит $2 за $10 000 → к порогу "
             f"открытия +1 bps,\nслабые сделки отсекаются, цена возвращается к "
-            f"$2.\n\n"
+            f"$1.\n\n"
             f"[green]Плюс:[/green] больше объёма, и его цена под вашим "
             f"контролем.\n"
             f"[red]Минус:[/red] это покупка объёма, а не заработок. Первые 10 "
@@ -2599,6 +2600,9 @@ def strategy_detail(mode: str, v: dict) -> None:
         pause()
         return
     num = STRATEGIES[mode][0]
+    warn = miss_warning(mode, v["ticker"])
+    if warn:
+        console.print(f"  [yellow]{warn}.[/yellow]\n")
     if confirm(f"Включить стратегию {num} (для всех пар)?", default=False):
         apply_changes([("execution", "mode", mode)])
         pause()
@@ -2652,7 +2656,7 @@ def strategy_help() -> None:
    • Стратегия 2 — если на дашборде «получилось» заметно меньше
      «ожидалось»: значит, основная потеря — на цене исполнения.
    • Стратегия 3 — если нужен объём и вы готовы за него платить, но не
-     больше заданной цены.
+     дороже $1 за $10 000 объёма.
 
   [bold]Защита[/bold] — дополнительные фильтры. Сочетаются с любой стратегией
   и друг с другом, по умолчанию выключены. Каждый уменьшает число сделок.
@@ -2685,23 +2689,25 @@ def strategy_menu() -> None:
                       f"[dim](стратегии 2 и 3{'' if tight else ' — сейчас не действует'})[/dim]")
         vol = mode == "volume"
         dim = "" if vol else " — сейчас не действует"
-        console.print(f"  5  Сужение полосы для объёма: {fmt(v['vol_narrow'], True)} "
-                      f"bps [dim](стратегия 3{dim})[/dim]")
         cost, n = volume_cost_now(v)
         measured = (f"по сделкам стратегии 3 сейчас ${fmt(round(cost, 2))}"
                     if cost is not None else
                     f"не измерена: сделок стратегии 3 — {n} из 10")
-        console.print(f"  6  Предельная цена объёма: ${fmt(v['vol_cost'], True)} "
-                      f"за $10 000 [dim](стратегия 3{dim})[/dim]")
+        console.print(f"     Стратегия 3 [dim](вшито{dim}):[/dim] полоса уже на "
+                      f"{fmt(v['vol_narrow'], True)} bps, цена объёма ≤ "
+                      f"${fmt(v['vol_cost'], True)} за $10 000")
         console.print(f"     [dim]{measured}[/dim]")
+        warn = miss_warning(mode, v["ticker"])
+        if warn:
+            console.print(f"\n  [yellow]{warn}.[/yellow]")
         console.print("\n  [bold]Защита[/bold] [dim]— к любой стратегии, по "
                       "умолчанию выключена[/dim]")
-        console.print(f"  7  {PROTECTION_TEXTS['slipgate'][0]}: "
+        console.print(f"  5  {PROTECTION_TEXTS['slipgate'][0]}: "
                       + ("[bold]вкл[/bold]" if v["slipgate"] else "выкл"))
-        console.print(f"  8  {PROTECTION_TEXTS['excess'][0]}: "
+        console.print(f"  6  {PROTECTION_TEXTS['excess'][0]}: "
                       + (f"[bold]вкл, {fmt(v['max_excess'], True)} bps[/bold]"
                          if v["max_excess"] > 0 else "выкл"))
-        console.print("\n  9  Как выбрать — коротко о стратегиях и "
+        console.print("\n  7  Как выбрать — коротко о стратегиях и "
                       "проскальзывании", markup=False)
         console.print("  0  Назад\n", markup=False)
         choice = ask()
@@ -2732,55 +2738,10 @@ def strategy_menu() -> None:
                                 fmt(new))])
                 pause()
         elif choice == "5":
-            header("Настройки · сужение полосы для объёма")
-            lim = min(v["upper_bps"], v["lower_bps"])
-            console.print("  [dim]Для стратегии 3: на сколько bps бот входит "
-                          "раньше, чем по порогам пары,\n  с каждой стороны. "
-                          "Больше — больше сделок и объёма, но каждая сделка "
-                          "с меньшим\n  запасом и дороже. Перерасход сдерживает "
-                          "«предельная цена объёма».\n"
-                          f"  По умолчанию {fmt(DEFAULT_VOLUME_NARROW_BPS)} "
-                          f"bps. Должно быть меньше upper и lower пары "
-                          f"(сейчас {fmt(lim)}).[/dim]\n")
-            while True:
-                new = ask_number("Сужение полосы, bps", v["vol_narrow"])
-                if 0 <= new <= 20:
-                    break
-                console.print("  [dim]От 0 до 20 bps.[/dim]")
-            if new != v["vol_narrow"]:
-                apply_changes([("execution", "volume_narrow_bps", fmt(new))])
-                pause()
-        elif choice == "6":
-            header("Настройки · предельная цена объёма")
-            console.print("  [dim]Для стратегии 3: сколько вы готовы потерять "
-                          "на каждые $10 000 объёма на Entropy.\n  $2 за "
-                          "$10 000 — это $200 за $1 000 000 (то же самое, что "
-                          "2 bps на сделку).\n  Бот считает фактическую цену "
-                          "по последним 50 сделкам пары. Выше предела —\n  "
-                          "открывает только сделки с большей премией, пока "
-                          "цена не вернётся.\n  0 — объём не должен стоить "
-                          "ничего (бот откроет только сделки, которые в\n  "
-                          "среднем не теряют).\n"
-                          f"  По умолчанию ${fmt(DEFAULT_VOLUME_MAX_COST)}."
-                          f"[/dim]\n")
-            if cost is not None:
-                console.print(f"  По сделкам стратегии 3 на "
-                              f"{pair_label(v['pair'])} цена сейчас: "
-                              f"${fmt(round(cost, 2))} за $10 000 ({n} "
-                              f"сделок).\n")
-            while True:
-                new = ask_number("Предельная цена, $ за $10 000", v["vol_cost"])
-                if 0 <= new <= 100:
-                    break
-                console.print("  [dim]От 0 до 100.[/dim]")
-            if new != v["vol_cost"]:
-                apply_changes([("execution", "volume_max_cost_usd", fmt(new))])
-                pause()
-        elif choice == "7":
             protection_detail("slipgate", v)
-        elif choice == "8":
+        elif choice == "6":
             protection_detail("excess", v)
-        elif choice == "9":
+        elif choice == "7":
             strategy_help()
 
 

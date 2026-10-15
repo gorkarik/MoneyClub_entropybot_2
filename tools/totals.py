@@ -15,14 +15,18 @@ import argparse
 import csv
 import math
 import os
+import sys
 import time
 from collections import defaultdict
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from entropy_arb import holding as hold  # noqa: E402
+from entropy_arb import results  # noqa: E402
+
 PERIODS = [(7, "Неделя"), (30, "Месяц"), (0, "Всё время")]
-VENUE_TITLES = {"ENTROPY": "Entropy", "RH": "Lighter RH", "LIGHTER": "Lighter",
-                "XYZ": "trade.xyz"}
-HEDGE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter",
-                "tradexyz": "trade.xyz"}
+VENUE_TITLES = {"ENTROPY": "Entropy", "RH": "Lighter RH", "LIGHTER": "Lighter"}
+HEDGE_TITLES = {"lighter-rh": "Lighter RH", "lighter": "Lighter"}
 STRATEGY_TITLES = {"simultaneous": "1 · Обе ноги сразу",
                    "entropy_first": "2 · Сначала Entropy",
                    "volume": "3 · Объём"}
@@ -95,6 +99,8 @@ class Totals:
         self.fund_n = 0
         self.fees = 0.0
         self.strategies = defaultdict(int)
+        self.session_rows = []
+        self.hold = None                   # holding.Holding
 
     def add_trade(self, r):
         bv = leg_volume(r, "buy")
@@ -143,6 +149,7 @@ class Totals:
 
     def add_session(self, r):
         self.sessions += 1
+        self.session_rows.append(r)
         p = num(r.get("pnl_usd"))
         if p is not None:
             self.pnl += p
@@ -166,6 +173,8 @@ def collect(trades, hedges, sessions, cutoff):
     for r in sessions:
         if (num(r.get("end_ts")) or 0) >= cutoff:
             t.add_session(r)
+    t.hold = hold.holding([r for r in trades if r.get("ok") == "1"], hedges,
+                          sessions, cutoff)
     return t
 
 
@@ -190,14 +199,21 @@ def block(t: Totals, title: str, hedge_title: str = ""):
         word = "стоили" if cost > 0 else "принесли"
         out.append(f"  $10 000 объёма на Entropy {word} {money(abs(cost), False)}"
                    f" (= {money(abs(cost) * 100, False)} за $1 000 000)")
-    if t.sessions:
+    b = results.sessions_breakdown(t.session_rows)
+    if b:
+        out += results.breakdown_lines(b, hedge_title or "хедж")
+    elif t.sessions:
         out.append(f"  Результат по балансу (сессий: {t.sessions}): "
                    f"{money(t.pnl) if t.pnl_n else '—'}")
         if t.fund_n:
             out.append(f"    в нём funding: Entropy {money(t.fund_e)} · "
                        f"{hedge_title or 'хедж'} {money(t.fund_h)}")
+    if t.sessions:
         out.append(f"    комиссии (расчёт по ставкам настроек): "
                    f"{money(t.fees, False)}")
+    hs = hold.summary(t.hold) if t.hold is not None else None
+    if hs:
+        out.append(f"  Удержание позиции: {hs}")
     if len(t.days) >= 2:
         best = max(t.days.items(), key=lambda kv: kv[1])
         worst = min(t.days.items(), key=lambda kv: kv[1])
@@ -263,12 +279,9 @@ def main():
                            + (f", по балансу {money(pt.pnl)}" if pt.pnl_n
                               else ""))
         out.append("")
-    out.append("Итог по сделкам — разница цен исполнения обеих ног (с комиссией"
-               " по ставке настроек).")
-    out.append("Результат по балансу — изменение балансов бирж за сессии: в нём "
-               "ещё funding,")
-    out.append("выравнивания и открытые позиции. Возврат комиссии Entropy сюда "
-               "не входит.")
+    out += results.EXPLAIN
+    out.append("Удержание — сколько живёт каждая часть позиции на Entropy "
+               "(первой открыта — первой закрыта).")
     print("\n".join(out))
 
 

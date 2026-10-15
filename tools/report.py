@@ -164,6 +164,9 @@ class T:
         avg_not = (self.bnot + self.snot) / 2 or None
         self.fill_bps = self.fill_adj / avg_not * 1e4 if avg_not else None
         self.exp_bps = self.exp / avg_not * 1e4 if avg_not else None
+        # plan − fact: the premium cancels out, so this one averages well
+        self.loss_bps = (self.exp_bps - self.fill_bps
+                         if self.fill_bps is not None else None)
 
 
 # -------------------------------------------------------------------- report
@@ -457,6 +460,22 @@ def main():
         w(line)
     w("")
 
+    w("== Результат по балансу ==")
+    from entropy_arb import holding as hold
+    from entropy_arb import results
+    bd = results.sessions_breakdown(sessions)
+    if bd:
+        for line in results.breakdown_lines(bd, indent=""):
+            w(line)
+    else:
+        w("— (нужны итоги сессий нового формата: появятся после Стопа)")
+    hs = hold.summary(hold.holding([t.r for t in trades if t.ok], hedges,
+                                   sessions, cutoff))
+    w(f"удержание позиции на Entropy: {hs or '— (нет закрытых частей)'}")
+    for line in results.EXPLAIN:
+        w(line)
+    w("")
+
     # 1. coverage
     span = [t.ts for t in trades]
     w("== Покрытие данных ==")
@@ -491,8 +510,10 @@ def main():
     w(f"расхождение факт − план: ${s_adj - s_exp:+.4f} "
       f"({f((s_adj - s_exp) / turn * 1e4 if turn else None, 2, True)} bps "
       f"от оборота)")
-    w(f"средняя сделка: план {f(mean([t.exp_bps for t in trades]), 2, True)}"
-      f" bps · факт {f(mean([t.fill_bps for t in trades]), 2, True)} bps")
+    w(f"потеря на исполнении в среднем: "
+      f"{f(mean([t.loss_bps for t in trades]), 2, True)} bps на сделку "
+      f"(план − факт; сам fill_bps сделки включает премию и в среднем "
+      f"смысла не имеет)")
     w("")
 
     # 3. decomposition (new rows)
@@ -542,10 +563,10 @@ def main():
         rows.append([d, len(ts), f"{sum(t.turnover for t in ts):,.0f}",
                      f(sum(t.exp for t in ts), 4, True),
                      f(sum(t.fill_adj for t in ts), 4, True),
-                     f(mean([t.fill_bps for t in ts]), 2, True),
+                     f(mean([t.loss_bps for t in ts]), 2, True),
                      f(mean([t.prem for t in ts]), 2, True)])
     out += table(["direction", "n", "turnover$", "exp$", "fill$",
-                  "fill_bps", "premium"], rows) if rows else ["—"]
+                  "loss_bps", "premium"], rows) if rows else ["—"]
     w("")
 
     # 4b. open vs close (rows written since strategies were added)
@@ -595,11 +616,11 @@ def main():
             continue
         rows.append([f"{h:02d}", len(ts),
                      f(sum(t.fill_adj for t in ts), 4, True) if ts else "",
-                     f(mean([t.fill_bps for t in ts]), 2, True) if ts else "",
+                     f(mean([t.loss_bps for t in ts]), 2, True) if ts else "",
                      f(mean(mh.get(h, [])), 2, True),
                      f(st.pstdev(mh[h]) if len(mh.get(h, [])) > 1 else None,
                        2)])
-    out += table(["hour", "trades", "fill$", "fill_bps", "mkt_prem",
+    out += table(["hour", "trades", "fill$", "loss_bps", "mkt_prem",
                   "mkt_std"], rows) if rows else ["—"]
     w("")
 
