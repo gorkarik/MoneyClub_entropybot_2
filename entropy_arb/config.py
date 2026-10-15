@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from dotenv import load_dotenv
 
+from .autonomy import AutonomyConf
+
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
@@ -211,6 +213,8 @@ class Config:
     autocalib_min_hours: float = 18.0
     midline_anchor_bps: Optional[float] = None
     autocalib_last_ts: Optional[float] = None
+    # autonomy (autonomy.py): floating centre, exit relief, calm opening
+    autonomy: AutonomyConf = AutonomyConf()
     # runtime
     hl_api_url: str = HL_API_URL
     hl_ws_url: str = HL_WS_URL
@@ -300,6 +304,18 @@ _SCHEMA: Dict[str, Any] = {
         "max_drift_bps": float,
         "min_hours": float,
     },
+    "autonomy": {
+        "enabled": bool,
+        "window_min": float,
+        "min_min": float,
+        "max_drift_bps": float,
+        "exit_hours": float,
+        "exit_floor_bps": float,
+        "size_weight": float,
+        "open_cooldown_sec": float,
+        "jump_bps": float,
+        "jump_window_min": float,
+    },
     "recorder": {
         "enabled": bool,
         "csv": str,
@@ -367,6 +383,39 @@ def _validate(node: Any, schema: Dict[str, Any], path: str = "") -> None:
         elif want is str:
             if not isinstance(val, str):
                 raise ConfigError(f"'{here}' must be a string, got {val!r}")
+
+
+_AUTONOMY_RANGES = {          # key: (lo, hi)
+    "window_min": (10.0, 1440.0),
+    "min_min": (5.0, 1440.0),
+    "max_drift_bps": (0.0, 500.0),
+    "exit_hours": (0.0, 168.0),
+    "exit_floor_bps": (-50.0, 50.0),
+    "size_weight": (0.0, 1.0),
+    "open_cooldown_sec": (0.0, 3600.0),
+    "jump_bps": (0.0, 500.0),
+    "jump_window_min": (1.0, 120.0),
+}
+
+
+def _autonomy(raw: dict) -> AutonomyConf:
+    d = AutonomyConf()
+    vals = {}
+    for key, (lo, hi) in _AUTONOMY_RANGES.items():
+        v = float(_get(raw, "autonomy", key, getattr(d, key)))
+        if not lo <= v <= hi:
+            raise ConfigError(f"'autonomy.{key}' = {v:g} is out of range "
+                              f"{lo:g}..{hi:g} / значение вне допустимого "
+                              f"диапазона")
+        vals[key] = v
+    if vals["min_min"] > vals["window_min"]:
+        raise ConfigError("autonomy.min_min must be <= window_min / "
+                          "минимум данных больше окна центра")
+    if vals["jump_window_min"] > vals["window_min"]:
+        raise ConfigError("autonomy.jump_window_min must be <= window_min / "
+                          "окно скачка больше окна центра")
+    return AutonomyConf(enabled=bool(_get(raw, "autonomy", "enabled", True)),
+                        **vals)
 
 
 def _get(d: dict, section: str, key: str, default):
@@ -639,6 +688,8 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                           "min_hours 1..window_hours / автокалибровка: "
                           "значение вне допустимого диапазона")
 
+    autonomy = _autonomy(raw)
+
     exec_mode = str(_get(raw, "execution", "mode", "simultaneous")).strip()
     if exec_mode not in EXEC_MODES:
         raise ConfigError(f"execution.mode must be one of {list(EXEC_MODES)} "
@@ -762,4 +813,5 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         slipgate_max_samples=int(sg["max_samples"]),
         ticks_sec=ticks_sec,
         ticks_dir=str(_get(raw, "recorder", "ticks_dir", "logs/ticks")),
+        autonomy=autonomy,
     )

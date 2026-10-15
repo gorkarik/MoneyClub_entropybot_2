@@ -123,13 +123,20 @@ def pair_title(eng) -> str:
 def start_text(eng) -> str:
     mode = "тестовая запись (без сделок)" if eng.record_only \
         else "режим торговли"
-    lines = ["▶️ MoneyClub_entropybot_2 запущен", f"Пара: {pair_title(eng)}",
+    lines = ["▶️ MoneyClub_entropybot_3 запущен", f"Пара: {pair_title(eng)}",
              f"Режим: {mode}"]
     if not eng.record_only:
         cfg = eng.cfg
         lines.append(f"Пороги: центр {cfg.midline_bps:+g}, "
                      f"+{cfg.upper_bps:g} / −{cfg.lower_bps:g} bps")
         lines.append(strategy_name_line(eng))
+        auto = getattr(eng, "auto", None)
+        if auto is not None and auto.enabled:
+            lines.append(f"Автономность: центр плавающий (медиана за "
+                         f"{auto.window_min:g} мин, до ±{auto.max_drift_bps:g} "
+                         f"от центра пары), выход к центру за "
+                         f"{auto.exit_hours:g} ч, открытия не чаще раза в "
+                         f"{auto.open_cooldown_sec:g} с")
         if getattr(eng, "autocalib_on", False):
             from .autocalib import window_label
             lines.append(f"Автокалибровка центра: вкл (медиана за "
@@ -155,7 +162,7 @@ STOP_REASONS = {"manual": "вручную (Стоп)", "loss_limit": "стоп �
 def finish_text(eng, s: dict) -> str:
     """s: what _finish_session computed (live) — see Engine._finish_session."""
     pnl, pct = s.get("pnl"), s.get("pnl_pct")
-    head = "⏹ MoneyClub_entropybot_2 остановлен"
+    head = "⏹ MoneyClub_entropybot_3 остановлен"
     lines = [head, f"Пара: {pair_title(eng)}"]
     res = _usd(pnl, sign=True)
     if pct is not None:
@@ -202,7 +209,14 @@ def _premium_line(eng) -> Optional[str]:
         return None
     line = f"Премия: {p:+.2f} bps"
     if not eng.record_only:
-        line += f" (центр {eng.cfg.midline_bps:+g})"
+        mid = eng.mid_bps() if hasattr(eng, "mid_bps") else eng.cfg.midline_bps
+        if abs(mid - eng.cfg.midline_bps) >= 0.05:
+            line += (f" (центр {mid:+.1f}, плавающий; "
+                     f"в файле пары {eng.cfg.midline_bps:+g})")
+        else:
+            line += f" (центр {eng.cfg.midline_bps:+g})"
+        if getattr(eng, "_jump_on", False):
+            line += "\n⚠ Скачок премии: новые позиции ждут, закрытие разрешено"
     st = eng.premium_stats()
     if st is not None:
         lo, med, hi, _ = st

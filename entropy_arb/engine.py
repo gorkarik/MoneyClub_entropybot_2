@@ -29,6 +29,7 @@ from .slipgate import SlipModel, leg_slip_bps, slip_file_name
 from .strategy import VolumeCost, strategy_title, tight_entropy_first
 from .ticks import TickRecorder
 from . import autocalib
+from . import autonomy
 from . import journal
 from . import telegram as tgmsg
 from .telegram import TelegramBot
@@ -164,6 +165,18 @@ class Engine:
         self.autocalib_last_ts = getattr(cfg, "autocalib_last_ts", None)
         self.autocalib_last: Optional[autocalib.Decision] = None
         self.autocalib_waiting = False      # due, but a position is open
+        # autonomy (autonomy.py): floating centre, exit relief, calm opening
+        conf = getattr(cfg, "autonomy", None)
+        self.auto = conf if conf is not None else autonomy.AutonomyConf(
+            enabled=False)
+        self.centre: Optional[autonomy.Centre] = (
+            autonomy.Centre(self.auto, cfg.midline_bps)
+            if self.auto.enabled else None)
+        self.last_open_ts = 0.0
+        self.pos_open_ts: Optional[float] = None    # when the position opened
+        self.jump_skips = 0
+        self._jump_on = False
+        self._leash_logged = False
         # unhedged remainder (net of both legs) — max $ seen this session,
         # and what flatten could not close at Stop (below venue minimums)
         self.max_unhedged_usd = 0.0
@@ -432,6 +445,17 @@ class Engine:
             tasks.append(asyncio.create_task(self._http_keepalive_loop(),
                                              name="keepalive"))
         tasks.append(asyncio.create_task(self._status_loop(), name="status"))
+        if self.centre is not None:
+            try:
+                rows = autonomy.seed_rows(cfg.recorder_csv,
+                                          self.auto.window_min, time.time())
+                self.centre.seed(rows)
+                self.centre.update(time.time())
+                log.info("[autonomy] centre seeded from %d minutes: %s",
+                         len(rows), f"{self.centre.live:+.1f} bps"
+                         if self.centre.live is not None else "not yet")
+            except Exception:
+                log.exception("[autonomy] centre seed failed")
         tasks.append(asyncio.create_task(self._premium_sampler(),
                                          name="premium"))
         if live:
@@ -528,14 +552,103 @@ class Engine:
 
         selling entropy: executable premium must clear midline + upper;
         buying entropy: the reverse premium must clear lower - midline."""
+        mid = self.mid_bps()
         if sell.key == "entropy":
-            base = self.cfg.midline_bps + self.cfg.upper_bps
+            band = self.cfg.upper_bps
+            base = mid + band
         else:
-            base = self.cfg.lower_bps - self.cfg.midline_bps
+            band = self.cfg.lower_bps
+            base = band - mid
+        if self.auto.enabled and not self._opens(buy, sell):
+            base -= self.exit_relief_bps(band)
         return (base - self.volume_narrow_bps()
                 + self._inv_add_bps(buy, sell)
                 + self.slip_charge_bps(buy, sell)
                 + self.volume_charge_bps(buy, sell))
+
+    def mid_bps(self) -> float:
+        """Centre of the band in use: the floating centre when autonomy is
+        on and has enough data, else the pair's midline."""
+        c = self.centre
+        if c is not None and c.live is not None:
+            return c.live
+        return self.cfg.midline_bps
+
+    def hold_age_sec(self, now: Optional[float] = None) -> Optional[float]:
+        """Seconds since the Entropy position last opened from flat (None:
+        flat). Positions below the venue minimum count as flat."""
+        now = time.time() if now is None else now
+        e = self.entropy
+        ref = e.book.mid() if e is not None else None
+        flat = (e is None or not ref
+                or abs(e.position) * ref < max(self._min_notional, 1.0))
+        if flat:
+            self.pos_open_ts = None
+            return None
+        if self.pos_open_ts is None:
+            self.pos_open_ts = now
+        return now - self.pos_open_ts
+
+    def cap_frac(self) -> float:
+        e = self.entropy
+        ref = e.book.mid() if e is not None else None
+        if not ref or not e.cap_usd:
+            return 0.0
+        return min(abs(e.position) * ref / e.cap_usd, 1.0)
+
+    def exit_relief_bps(self, band: float) -> float:
+        return autonomy.exit_relief_bps(self.auto, band, self.hold_age_sec(),
+                                        self.cap_frac())
+
+    def _open_blocked(self, buy, sell, now: float, dkey: str) -> bool:
+        """Calm opening: space out trades that add to the position and hold
+        them while the premium has jumped away from the centre."""
+        if not self.auto.enabled or not self._opens(buy, sell):
+            return False
+        gap = self.auto.open_cooldown_sec
+        if gap > 0 and now - self.last_open_ts < gap:
+            self._schedule_poke(gap - (now - self.last_open_ts))
+            return True
+        c = self.centre
+        if c is not None and c.jumped():
+            if not self._jump_on:
+                self._jump_on = True
+                self.jump_skips += 1
+                log.warning("[autonomy] premium jumped: last %.0f min %+.1f vs "
+                            "centre %+.1f bps — no new positions until the "
+                            "centre catches up (closing still allowed)",
+                            self.auto.jump_window_min, c.recent, c.live)
+            self._skiplog("%s held: premium jump (%+.1f vs centre %+.1f)",
+                          dkey, c.recent, c.live)
+            return True
+        if self._jump_on:
+            self._jump_on = False
+            log.warning("[autonomy] premium back near the centre — opening "
+                        "allowed again")
+        return False
+
+    def _feed_centre(self, now: float) -> None:
+        c = self.centre
+        if c is None:
+            return
+        self.hold_age_sec(now)
+        c.manual = self.cfg.midline_bps       # autocalib / menu may move it
+        st = self.cfg.staleness_sec
+        p = None
+        if (self.entropy is not None and self.hedge is not None
+                and self.entropy.book.is_fresh(st)
+                and self.hedge.book.is_fresh(st)):
+            p = self.premium_bps()
+        if p is None:
+            c.update(now)
+        else:
+            c.add(now, p)
+        if c.at_leash and not self._leash_logged:
+            log.warning("[autonomy] premium is more than %.0f bps from the "
+                        "pair midline %+.1f — the centre stops at %+.1f; "
+                        "re-calibrate the pair", self.auto.max_drift_bps,
+                        self.cfg.midline_bps, c.live)
+        self._leash_logged = c.at_leash
 
     def _log_strategy(self) -> None:
         cfg = self.cfg
@@ -758,6 +871,17 @@ class Engine:
                 continue
             if plan is None:
                 continue
+            if self._open_blocked(buy, sell, now, dkey):
+                continue
+            if self.auto.enabled and not self._opens(buy, sell):
+                # a relaxed closing hurdle must never open the other side:
+                # a closing trade is at most the position it closes
+                pos_usd = abs(self.entropy.position) * plan.buy_limit
+                if plan.buy_notional > pos_usd + 1e-9:
+                    plan, _ = self._plan(buy, sell,
+                                         min(cfg.max_order_notional, pos_usd))
+                    if plan is None:
+                        continue
             if self._too_good(buy, sell, plan, dkey):
                 continue
             headroom = self._headroom(buy, sell, plan.buy_limit)
@@ -808,6 +932,8 @@ class Engine:
         # open = adds to (or starts) the Entropy position; close = reduces it
         action = "open" if self._opens(buy, sell) else "close"
         self.last_trade_ts = time.time()
+        if action == "open":
+            self.last_open_ts = self.last_trade_ts
         log.info("[ARB] %s: BUY %s %.6g @<=%.6g | SELL %s @>=%.6g | "
                  "take $%.0f of $%.0f | prem %.2fbps | exp $%.4f",
                  direction, buy.name, plan.qty, plan.buy_limit, sell.name,
@@ -2110,7 +2236,14 @@ class Engine:
         return vals[0], med, vals[-1], (time.time() - first) / 60.0
 
     async def _premium_sampler(self) -> None:
+        last_feed = 0.0
         while not self.stop.is_set():
+            if time.time() - last_feed >= autonomy.SAMPLE_SEC:
+                last_feed = time.time()
+                try:
+                    self._feed_centre(last_feed)
+                except Exception:
+                    log.exception("[autonomy] centre update failed")
             try:
                 p = self.premium_bps()
             except Exception:
@@ -2155,8 +2288,8 @@ class Engine:
             log.info("[status] %s | prem %s bps (band %+.2f..%+.2f) | pos %s "
                      "net %+.6g | trades %d hedges %d | MTM %s expEdge $%.4f "
                      "fillEdge $%.4f%s%s%s",
-                     books, prem_s, cfg.midline_bps - cfg.lower_bps,
-                     cfg.midline_bps + cfg.upper_bps, pos, net, self.trades,
+                     books, prem_s, self.mid_bps() - cfg.lower_bps,
+                     self.mid_bps() + cfg.upper_bps, pos, net, self.trades,
                      self.hedges,
                      f"${pnl:+.4f}" if pnl is not None else "—",
                      self.total_exp_edge, self.total_fill_edge, risk, rec,
@@ -2178,7 +2311,7 @@ class Engine:
                 f"{plan.buy_notional:.2f}", f"{plan.sell_notional:.2f}",
                 f"{plan.exp_edge_usd:.4f}", f"{plan.gross_edge_usd:.4f}",
                 f"{plan.marginal_premium_bps:.3f}",
-                f"{self.cfg.midline_bps:.3f}",
+                f"{self.mid_bps():.3f}",
                 f"{inv_bps:.3f}", int(ok), f"{bfill:.8g}",
                 f"{sfill:.8g}", bstatus, sstatus, f"{fill_edge:.4f}",
                 f(bpx, 8), f(spx, 8),

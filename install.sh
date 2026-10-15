@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MoneyClub_entropybot_2 — установка одной командой на чистый сервер Ubuntu:
+# MoneyClub_entropybot_3 — установка одной командой на чистый сервер Ubuntu:
 #
 #   curl -fsSL https://raw.githubusercontent.com/ВАШ_ГИТХАБ/MoneyClub_entropybot_2/main/install.sh | bash
 #
@@ -15,7 +15,7 @@ main() {
   # ↓↓↓ ЕДИНСТВЕННОЕ, ЧТО НУЖНО ПОМЕНЯТЬ: адрес вашего репозитория ↓↓↓
   local REPO_URL="${MONEYCLUB_REPO:-https://github.com/gorkarik/MoneyClub_entropybot_2.git}"
   local APP_DIR="${MONEYCLUB_DIR:-$HOME/money-club}"
-  # Вторая копия на том же сервере: MONEYCLUB_DIR=$HOME/MoneyClub_entropybot_2
+  # Вторая копия на том же сервере: MONEYCLUB_DIR=$HOME/MoneyClub_entropybot_3
   # MONEYCLUB_CMD=moneyclub2 — своя папка и своя команда, чтобы не затереть
   # первую. По умолчанию — как раньше (папка money-club, команда moneyclub).
   local CMD="${MONEYCLUB_CMD:-moneyclub}"
@@ -24,7 +24,7 @@ main() {
   ok()   { printf '  ✔ %s\n' "$*"; }
   fail() { printf '\n  ✘ %s\n\n' "$*" >&2; exit 1; }
 
-  printf '\n  M O N E Y   C L U B  ·  entropy bot 2  —  установка\n'
+  printf '\n  M O N E Y   C L U B  ·  entropy bot 3  —  установка\n'
 
   case "$REPO_URL" in
     *ВАШ_ГИТХАБ*) fail "В install.sh не указан адрес репозитория (REPO_URL)." ;;
@@ -89,7 +89,7 @@ main() {
       printf '  ! не удалось обновить — продолжаю с текущей версией\n'
     fi
   elif [ -e "$APP_DIR" ]; then
-    fail "Папка $APP_DIR уже существует и это не установка MoneyClub_entropybot_2. Переименуйте её и запустите снова."
+    fail "Папка $APP_DIR уже существует и это не установка MoneyClub_entropybot_3. Переименуйте её и запустите снова."
   else
     git clone -q --depth 1 "$REPO_URL" "$APP_DIR" || fail "Не удалось скачать $REPO_URL (репозиторий должен быть публичным)."
     ok "скачан в $APP_DIR"
@@ -133,7 +133,7 @@ main() {
   LAUNCHER="$(mktemp)"
   cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
-# MoneyClub_entropybot_2 — открыть меню
+# MoneyClub_entropybot_3 — открыть меню
 export PYTHONUTF8=1
 cd "$APP_DIR" && exec "$APP_DIR/venv/bin/python" "$APP_DIR/club.py" "\$@"
 EOF
